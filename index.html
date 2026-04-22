@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BZ4X Trip Optimizer</title>
+<title>BZ4X Trip Optimizer Pro</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="chargers_data.js"></script>
 <style>
@@ -23,13 +23,15 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, sans-s
 .field { margin-bottom: 10px; }
 label { display: block; font-size: .75rem; color: var(--muted); margin-bottom: 3px; }
 input, select { width: 100%; background: #0f172a; border: 1px solid var(--border); color: var(--text); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; }
-#calc-btn { width: 100%; padding: 12px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 10px; }
+#calc-btn { width: 100%; padding: 12px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 10px; transition: 0.2s; }
+#calc-btn:hover { background: #2563eb; }
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .stat { background: #0f172a; border-radius: var(--radius); padding: 10px; text-align: center; }
-.stat .val { font-size: 1.2rem; font-weight: 700; color: var(--accent2); }
+.stat .val { font-size: 1.3rem; font-weight: 700; color: var(--accent2); }
 .stop-item { background: #0f172a; border-radius: var(--radius); padding: 12px; margin-bottom: 8px; border-left: 4px solid var(--green); }
-#map { flex-shrink: 0; height: 400px; background: #1e293b; }
-.chart-wrap { padding: 16px; border-bottom: 1px solid var(--border); position: relative; min-height: 220px; flex: 1; }
+.poi-tag { display: inline-block; background: #1e3a5f; color: #93c5fd; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-right: 4px; margin-top: 5px; }
+#map { flex-shrink: 0; height: 45%; min-height: 300px; background: #1e293b; }
+.chart-wrap { padding: 12px 16px; border-bottom: 1px solid var(--border); position: relative; flex: 1; min-height: 200px; }
 .chart-ctrl { position: absolute; top: 12px; right: 16px; z-index: 10; display: flex; gap: 4px; }
 .ctrl-btn { background: #334155; border: none; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; }
 .ctrl-btn.active { background: var(--accent2); }
@@ -40,7 +42,8 @@ input, select { width: 100%; background: #0f172a; border: 1px solid var(--border
 @media (max-width: 860px) {
   #app { flex-direction: column; height: auto; overflow: visible; }
   #left { width: 100%; border-right: none; }
-  #map { height: 300px; }
+  #map { height: 350px; }
+  .chart-wrap { min-height: 250px; }
 }
 </style>
 </head>
@@ -48,24 +51,24 @@ input, select { width: 100%; background: #0f172a; border: 1px solid var(--border
 <div id="loading"><div class="spinner"></div><div id="loading-msg">計算中...</div></div>
 <div id="app">
   <div id="left">
-    <div class="section"><h1>BZ4X Trip Optimizer</h1></div>
-    <div class="section">
-      <label>Google Maps API Key</label>
-      <input type="password" id="api-key" placeholder="APIキーを入力してリロード">
+    <div class="section"><h1>BZ4X Trip Optimizer Pro</h1></div>
+    <div class="section" style="padding-top:0; border-bottom:none;">
+      <label style="font-size:10px;">Google Maps API Key</label>
+      <input type="password" id="api-key" placeholder="APIキーを入力してリロード" style="padding:4px; font-size:11px;">
     </div>
-    <div class="section">
+    <div class="section" style="border-top: 1px solid var(--border);">
       <div class="field"><label>予定日</label><input type="date" id="trip-date"></div>
-      <div class="field"><label>出発地</label><input type="text" id="origin" placeholder="例：立川"></div>
-      <div class="field"><label>目的地</label><input type="text" id="dest" placeholder="例：大阪駅"></div>
+      <div class="field"><label>出発地</label><input type="text" id="origin" value="東京"></div>
+      <div class="field"><label>目的地</label><input type="text" id="dest" value="大阪"></div>
       <div class="row2">
         <div class="field"><label>出発SOC (%)</label><input type="number" id="start-soc" value="100"></div>
         <div class="field"><label>充電閾値 (%)</label><input type="number" id="threshold-soc" value="20"></div>
       </div>
-      <button id="calc-btn">シミュレーション開始</button>
+      <button id="calc-btn">適応型シミュレーション開始</button>
     </div>
     <div class="section" id="results" style="display:none">
       <div class="stat-grid">
-        <div class="stat"><div class="val" id="r-eta">--:--</div><div class="lbl">所要時間</div></div>
+        <div class="stat"><div class="val" id="r-eta">--:--</div><div class="lbl">総所要時間</div></div>
         <div class="stat"><div class="val" id="r-soc">--%</div><div class="lbl">到着SOC</div></div>
       </div>
       <div id="stop-list" style="margin-top:15px"></div>
@@ -80,19 +83,22 @@ input, select { width: 100%; background: #0f172a; border: 1px solid var(--border
       </div>
       <canvas id="soc-chart"></canvas>
     </div>
+    <div class="chart-wrap">
+      <div style="font-size:11px; color:var(--muted); position:absolute; top:12px; left:16px;">標高プロファイル</div>
+      <canvas id="elev-chart"></canvas>
+    </div>
   </div>
 </div>
 
 <script>
-let googleMap, directionsService, placesService;
+let googleMap, directionsService, elevationService, placesService;
 let chargerDB = (typeof CHARGER_DATA !== 'undefined') ? CHARGER_DATA : [];
 let currentSim = null, currentAxis = 'time', routePolylines = [];
-let socChart = null; // ★コレが未定義でエラーになっていました
+let socChart = null, elevChart = null;
 
-// 気温取得API
 async function fetchTemp(lat, lng, dateStr) {
     const d = dateStr ? new Date(dateStr) : new Date();
-    const month = isNaN(d) ? 4 : d.getMonth() + 1; // 日付未入力の安全対策
+    const month = isNaN(d) ? 4 : d.getMonth() + 1;
     try {
         const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lng}&start_date=2023-${String(month).padStart(2,'0')}-01&end_date=2023-${String(month).padStart(2,'0')}-05&daily=temperature_2m_mean&timezone=Asia%2FTokyo`;
         const r = await fetch(url);
@@ -103,11 +109,12 @@ async function fetchTemp(lat, lng, dateStr) {
 
 function initApp() {
   googleMap = new google.maps.Map(document.getElementById('map'), {
-    center: { lat: 35.7, lng: 139.4 }, zoom: 6, styles: [{elementType:'geometry',stylers:[{color:'#1e293b'}]},{featureType:'water',stylers:[{color:'#0f172a'}]}]
+    center: { lat: 35.5, lng: 138.0 }, zoom: 6, styles: [{elementType:'geometry',stylers:[{color:'#1e293b'}]},{featureType:'water',stylers:[{color:'#0f172a'}]}]
   });
   directionsService = new google.maps.DirectionsService();
+  elevationService = new google.maps.ElevationService();
+  placesService = new google.maps.places.PlacesService(googleMap);
   
-  // サジェスト機能
   new google.maps.places.Autocomplete(document.getElementById('origin'));
   new google.maps.places.Autocomplete(document.getElementById('dest'));
 
@@ -120,7 +127,21 @@ function haversine(l1, g1, l2, g2) {
     return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
-async function runSimulation(segments, dateStr, params) {
+// 施設検索（完全復活）
+async function findNearbyPOIs(lat, lng) {
+  const types = ['convenience_store', 'restaurant', 'shopping_mall'];
+  const labels = { convenience_store:'コンビニ', restaurant:'飲食店', shopping_mall:'モール' };
+  let results = [];
+  try {
+    for (const t of types) {
+      const p = await new Promise(r => placesService.nearbySearch({location:{lat,lng}, radius:500, type:t}, res => r(res)));
+      if (p && p.length > 0) results.push(labels[t]);
+    }
+  } catch(e) {}
+  return results;
+}
+
+async function runSimulation(segments, elevations, dateStr, params) {
   const { batteryKwh, startSocPct, thresholdSocPct } = params;
   let socKwh = (startSocPct/100)*batteryKwh, km = 0, time = 0;
   let lastWeatherKm = -999, curTemp = 20, lastChargeKm = -999;
@@ -129,97 +150,107 @@ async function runSimulation(segments, dateStr, params) {
 
   for (let i = 0; i < segments.length; i++) {
     const s = segments[i];
-    // 100kmごとに気温を再取得
+    const currentElev = elevations[i];
+
     if (Math.abs(km - lastWeatherKm) > 100) {
+        showLoading(`環境データ解析中: ${km.toFixed(0)}km地点...`);
         curTemp = await fetchTemp(s.lat, s.lng, dateStr);
         lastWeatherKm = km;
     }
     
-    // 電費補正 (20度未満で低下)
-    const tempFactor = 1.0 - (curTemp < 20 ? (20 - curTemp) * 0.015 : 0);
-    const baseEff = s.speed > 75 ? 5.2 : 7.0; // 高速道路判定
-    const energy = (s.distKm / (baseEff * tempFactor)); 
+    // 標高による断熱減率(-0.6度/100m) ＋ 気温係数
+    const localTemp = curTemp - ((currentElev / 100) * 0.6);
+    const tempFactor = 1.0 - (localTemp < 20 ? (20 - localTemp) * 0.015 : 0);
+    const baseEff = s.speed > 75 ? 5.0 : 7.2; 
+    
+    // 標高差によるエネルギー増減を計算に追加
+    const elevEnergy = i < segments.length-1 ? ((elevations[i+1]-currentElev) * 2200 * 9.8 / 3.6e6) : 0;
+    const energy = (s.distKm / (baseEff * tempFactor)) + elevEnergy; 
     const currentSoc = (socKwh/batteryKwh)*100;
 
-    // 充電実行
     if (pending && i >= pending.targetIdx) {
       const chg = { km, charger: pending, socBefore: currentSoc, time };
       chg.duration = 30;
-      chg.socAfter = Math.min(85, currentSoc + (40/60*30/batteryKwh*100)); // 30分充電
+      chg.socAfter = Math.min(85, currentSoc + (45/60*30/batteryKwh*100)); // 45kWで30分
       stops.push(chg);
       
-      profile.push({ xDist: km, xTime: time, ySoc: currentSoc, lat: s.lat, lng: s.lng });
+      profile.push({ xDist: km, xTime: time, ySoc: currentSoc, lat: s.lat, lng: s.lng, elev: currentElev });
       time += 30; 
       socKwh = (chg.socAfter/100)*batteryKwh;
-      profile.push({ xDist: km, xTime: time, ySoc: chg.socAfter, lat: s.lat, lng: s.lng });
+      profile.push({ xDist: km, xTime: time, ySoc: chg.socAfter, lat: s.lat, lng: s.lng, elev: currentElev });
       
       lastChargeKm = km; 
       pending = null;
     }
 
-    // 充電器サーチ
-    if (!pending && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 50) {
+    if (!pending && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 30) {
       const found = chargerDB.find(c => haversine(c.lat, c.lng, s.lat, s.lng) < 3.0);
-      if (found) { found.targetIdx = i + 2; pending = found; }
+      if (found) { found.targetIdx = i + 1; pending = found; }
     }
 
     socKwh = Math.max(0, socKwh - energy);
     km += s.distKm; time += (s.distKm/s.speed)*60;
-    profile.push({ xDist: km, xTime: time, ySoc: (socKwh/batteryKwh)*100, lat: s.lat, lng: s.lng });
+    // 細かくプロットしてなめらかな線にする
+    profile.push({ xDist: km, xTime: time, ySoc: (socKwh/batteryKwh)*100, lat: s.lat, lng: s.lng, elev: currentElev });
   }
   return { profile, stops, arrivalSoc: (socKwh/batteryKwh)*100, eta: time };
 }
 
 async function onCalculate() {
-  showLoading('最適なルートと環境データを解析中...');
+  showLoading('ルートと標高を取得中...');
   const origin = document.getElementById('origin').value;
   const dest = document.getElementById('dest').value;
   
-  try {
-      directionsService.route({ origin, destination: dest, travelMode: 'DRIVING' }, async (res, status) => {
-        if(status!=='OK') {
-            alert('ルートが見つかりません。地名を変えてみてください。');
-            return hideLoading();
+  directionsService.route({ origin, destination: dest, travelMode: 'DRIVING' }, async (res, status) => {
+    if(status!=='OK') return hideLoading()||alert('ルートが見つかりません。');
+    
+    const steps = res.routes[0].legs[0].steps;
+    const path = res.routes[0].overview_path;
+    const segments = steps.map(s => ({ 
+        distKm: s.distance.value/1000, 
+        speed: (s.distance.value/s.duration.value)*3.6||60, 
+        lat: s.start_location.lat(), 
+        lng: s.start_location.lng() 
+    }));
+    
+    // 標高の一括取得（なめらかさのキモ）
+    elevationService.getElevationForLocations({ locations: path.length > 200 ? path.filter((_,i)=>i%Math.ceil(path.length/200)===0) : path }, async (elevRes) => {
+        const elevations = new Array(segments.length).fill(0);
+        if(elevRes) {
+            for(let i=0; i<segments.length; i++) {
+                const idx = Math.floor((i/segments.length) * elevRes.length);
+                elevations[i] = elevRes[idx] ? elevRes[idx].elevation : 0;
+            }
         }
-        
-        const steps = res.routes[0].legs[0].steps;
-        const segments = steps.map(s => ({ 
-            distKm: s.distance.value/1000, 
-            speed: (s.distance.value/s.duration.value)*3.6||60, 
-            lat: s.start_location.lat(), 
-            lng: s.start_location.lng() 
-        }));
-        
-        currentSim = await runSimulation(segments, document.getElementById('trip-date').value, {
+
+        currentSim = await runSimulation(segments, elevations, document.getElementById('trip-date').value, {
             batteryKwh: 71.4, 
             startSocPct: parseFloat(document.getElementById('start-soc').value), 
             thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value)
         });
 
-        // 統計パネルの更新
         document.getElementById('results').style.display = 'block';
         document.getElementById('r-soc').textContent = currentSim.arrivalSoc.toFixed(0) + '%';
         document.getElementById('r-eta').textContent = Math.floor(currentSim.eta/60) + '時間' + Math.round(currentSim.eta%60) + '分';
         
-        // 充電スポットリストの更新
+        // リスト生成 ＋ POI自動検索
         const list = document.getElementById('stop-list');
         list.innerHTML = '';
-        currentSim.stops.forEach((st) => {
+        showLoading('周辺施設を検索中...');
+        for (const st of currentSim.stops) {
+            const pois = await findNearbyPOIs(st.charger.lat, st.charger.lng);
             const div = document.createElement('div');
             div.className = 'stop-item';
-            div.innerHTML = `<div style="font-weight:bold;color:var(--accent2)">${st.charger.name}</div>
-                             <div style="font-size:12px;color:var(--muted)">到着時: ${st.socBefore.toFixed(0)}% → 完了時: ${st.socAfter.toFixed(0)}% (30分充電)</div>`;
+            div.innerHTML = `<div style="font-weight:bold;color:var(--accent2);font-size:14px;">${st.charger.name}</div>
+                             <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">到着: ${st.socBefore.toFixed(0)}% → 出発: ${st.socAfter.toFixed(0)}% (30分充電)</div>
+                             <div>${pois.length ? pois.map(p=>`<span class="poi-tag">#${p}</span>`).join('') : '<span style="font-size:10px;color:#64748b;">周辺施設なし</span>'}</div>`;
             list.appendChild(div);
-        });
+        }
 
         renderCharts();
         hideLoading();
-      });
-  } catch (error) {
-      alert('計算中にエラーが発生しました');
-      console.error(error);
-      hideLoading();
-  }
+    });
+  });
 }
 
 function setAxis(a) {
@@ -231,33 +262,49 @@ function setAxis(a) {
 
 function renderCharts() {
   if (!currentSim) return;
-  const socData = currentSim.profile.map(p => ({ x: currentAxis==='time'?p.xTime:p.xDist, y: p.ySoc }));
   
+  // SOCチャート
+  const socData = currentSim.profile.map(p => ({ x: currentAxis==='time'?p.xTime:p.xDist, y: p.ySoc }));
   if (socChart) socChart.destroy();
   socChart = new Chart(document.getElementById('soc-chart'), {
     type: 'line', 
-    data: { datasets: [{ data: socData, pointRadius: 0, borderWidth: 3, borderColor: '#06b6d4' }]},
+    data: { datasets: [{ data: socData, pointRadius: 0, borderWidth: 3, borderColor: '#3b82f6', tension: 0.2 }]},
     options: { 
         responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-        scales: { x: { type: 'linear', ticks: { callback: v => currentAxis==='time'?Math.floor(v/60)+'h'+Math.round(v%60)+'m' : v.toFixed(0)+'km'} } }
+        scales: { 
+            x: { type: 'linear', ticks: { callback: v => currentAxis==='time'?Math.floor(v/60)+'h'+Math.round(v%60)+'m' : v.toFixed(0)+'km'} },
+            y: { min: 0, max: 100 }
+        }
     }
   });
 
-  // マップ上のSOCライン描画
+  // 標高チャート（復活）
+  const elevData = currentSim.profile.map(p => ({ x: currentAxis==='time'?p.xTime:p.xDist, y: Math.max(0, p.elev) }));
+  if (elevChart) elevChart.destroy();
+  elevChart = new Chart(document.getElementById('elev-chart'), {
+    type: 'line', 
+    data: { datasets: [{ data: elevData, pointRadius: 0, borderWidth: 1, borderColor: '#06b6d4', fill: true, backgroundColor: 'rgba(6,182,212,0.1)' }]},
+    options: { 
+        responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: {enabled: false} },
+        scales: { 
+            x: { type: 'linear', display: false },
+            y: { beginAtZero: true }
+        }
+    }
+  });
+
+  // マップのライン（間引きなし、なめらかグラデーション）
   routePolylines.forEach(p => p.setMap(null));
   routePolylines = [];
-  for(let i=0; i<currentSim.profile.length-1; i+=3) { // 負荷軽減のため間引いて描画
+  for(let i=0; i<currentSim.profile.length-1; i++) {
     const p1 = currentSim.profile[i], p2 = currentSim.profile[i+1];
-    if(!p1 || !p2 || !p1.lat) continue;
+    if(!p1.lat) continue;
     const s = p1.ySoc;
-    
-    // SOCに応じて青から赤へ色を変える
-    const r = Math.floor(Math.max(0, Math.min(255, (100-s)*5)));
+    const r = Math.floor(Math.max(0, Math.min(255, (100-s)*4)));
     const b = Math.floor(Math.max(0, Math.min(255, s*2.5)));
-    
     routePolylines.push(new google.maps.Polyline({
       path: [{lat:p1.lat, lng:p1.lng}, {lat:p2.lat, lng:p2.lng}],
-      strokeColor: `rgb(${r}, 100, ${b})`, strokeWeight: 5, map: googleMap
+      strokeColor: `rgb(${r}, 100, ${b})`, strokeWeight: 6, strokeOpacity: 0.9, map: googleMap
     }));
   }
 }
