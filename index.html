@@ -35,9 +35,10 @@ input, select { width: 100%; background: #0f172a; border: 1px solid var(--border
 input:focus, select:focus { outline: none; border-color: var(--accent2); }
 #calc-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #3b82f6, #06b6d4); color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 700; cursor: pointer; transition: 0.3s; box-shadow: 0 4px 12px rgba(6, 182, 212, 0.2); }
 #calc-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(6, 182, 212, 0.4); }
-.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
-.stat { background: #0f172a; border-radius: 8px; padding: 12px; text-align: center; border: 1px solid var(--border); }
-.stat .val { font-size: 1.5rem; font-weight: 700; color: var(--accent2); }
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
+.stat { background: #0f172a; border-radius: 8px; padding: 10px 4px; text-align: center; border: 1px solid var(--border); }
+.stat .val { font-size: 1.2rem; font-weight: 700; color: var(--accent2); margin-top: 4px; }
+.stat .lbl { font-size: 0.65rem; }
 
 .stop-item { background: #0f172a; border-radius: 8px; padding: 16px; margin-bottom: 12px; border-left: 4px solid #10b981; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .chg-specs { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -76,9 +77,11 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
     </div>
     <div class="section" style="padding-top:10px;">
         <div class="field"><input type="password" id="api-key" placeholder="API KEY" style="font-family:monospace; font-size:12px;"></div>
+        <div class="field"><label>予定日 (気温取得用)</label><input type="date" id="trip-date"></div>
+        <div class="field"><label>出発時間 (例: 08:00)</label><input type="time" id="start-time" value="08:00"></div>
         <div class="field"><label>出発地</label><input type="text" id="origin" value="東京"></div>
         <div class="field"><label>目的地</label><input type="text" id="dest" value="大阪城"></div>
-        <div class="stat-grid">
+        <div class="stat-grid" style="grid-template-columns: 1fr 1fr;">
             <div class="field"><label>出発SOC (%)</label><input type="number" id="start-soc" value="100"></div>
             <div class="field"><label>充電閾値 (%)</label><input type="number" id="threshold-soc" value="20"></div>
         </div>
@@ -96,6 +99,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
         <div class="stat-grid">
             <div class="stat"><div class="lbl">総所要時間</div><div class="val" id="r-eta">--:--</div></div>
             <div class="stat"><div class="lbl">到着SOC</div><div class="val" id="r-soc">--%</div></div>
+            <div class="stat"><div class="lbl">平均気温</div><div class="val" id="r-temp">--℃</div></div>
         </div>
         <div id="stop-list" style="margin-top:20px"></div>
     </div>
@@ -116,7 +120,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
 <script>
 let googleMap, directionsService, placesService, elevationService;
 let chargerDB = (typeof CHARGER_DATA !== 'undefined') ? CHARGER_DATA : [];
-let currentSim = null, currentDetailedPath = null;
+let currentSim = null, currentDetailedPath = null, currentTripIsUpbound = false;
 let routePolylines = [], comboChart = null, mapMarkers = [], emergencyMarkers = [];
 let userForcedChargers = []; 
 let userWaypoints = []; 
@@ -196,7 +200,18 @@ function haversine(l1, g1, l2, g2) {
     return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
-// ★ bZ4XのSOCごとの受入能力(kW)を計算する関数
+// 気温取得API（50kmごとに実行）
+async function fetchTemp(lat, lng, dateStr) {
+    const d = dateStr ? new Date(dateStr) : new Date();
+    const month = isNaN(d) ? 4 : d.getMonth() + 1;
+    try {
+        const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lng}&start_date=2023-${String(month).padStart(2,'0')}-01&end_date=2023-${String(month).padStart(2,'0')}-05&daily=temperature_2m_mean&timezone=Asia%2FTokyo`;
+        const r = await fetch(url);
+        const data = await r.json();
+        return data.daily.temperature_2m_mean[0] || 15;
+    } catch(e) { return 15; }
+}
+
 function getVehicleAcceptanceKw(soc) {
     const curve = [
         [0, 115], [10, 115], [20, 135], [30, 140], [40, 135],
@@ -204,7 +219,6 @@ function getVehicleAcceptanceKw(soc) {
     ];
     if (soc <= 0) return curve[0][1];
     if (soc >= 100) return curve[curve.length - 1][1];
-    
     for (let i = 0; i < curve.length - 1; i++) {
         if (soc >= curve[i][0] && soc < curve[i+1][0]) {
             const socRange = curve[i+1][0] - curve[i][0];
@@ -216,44 +230,14 @@ function getVehicleAcceptanceKw(soc) {
     return 45;
 }
 
-// ★ 1分単位の厳密な充電シミュレーション（熱ダレ考慮）
-function calculateCharging(startSoc, durationMins, chargerName, powerKwStr) {
-    const batteryKwh = 71.4;
-    let currentSoc = startSoc;
-    let maxKw = parseInt(powerKwStr) || 50;
-    let isFlash = chargerName.toUpperCase().includes('FLASH');
-    let maxDemanded = 0;
-
-    for (let t = 1; t <= durationMins; t++) {
-        if (currentSoc >= 100) {
-            currentSoc = 100;
-            break;
-        }
-        
-        // その時点での車側の受入限界
-        let vehicleMax = getVehicleAcceptanceKw(currentSoc);
-        maxDemanded = Math.max(maxDemanded, vehicleMax);
-
-        let chargerMax = maxKw;
-        
-        // FLASH（水冷）以外で、90kW超えの充電器の熱ダレルールを適用
-        if (!isFlash && maxKw > 90) {
-            if (t <= 15) {
-                chargerMax = maxKw;
-            } else if (t <= 25) {
-                // 最初の15分で130kWを超えていたら熱ダレで90kWに落ちる。超えてなければ130kW維持。
-                chargerMax = maxDemanded > 130 ? 90 : 130;
-            } else {
-                chargerMax = 90;
-            }
-        }
-
-        // 実際に入力される電力は「車」と「充電器」の低い方
-        let actualKw = Math.min(vehicleMax, chargerMax);
-        let socAdded = (actualKw / 60) / batteryKwh * 100;
-        currentSoc += socAdded;
-    }
-    return Math.min(100, currentSoc);
+// ★ ディレクションチェック（上下線の判定）
+function isValidDirection(chgName, isUpboundTrip) {
+    if (!chgName) return true;
+    const isUpChg = chgName.includes('上り');
+    const isDownChg = chgName.includes('下り');
+    if (isUpboundTrip && isDownChg) return false;
+    if (!isUpboundTrip && isUpChg) return false;
+    return true; // 上下集約や記載なしは許可
 }
 
 async function findNearbyPOIs(lat, lng) {
@@ -269,12 +253,15 @@ async function findNearbyPOIs(lat, lng) {
   return results;
 }
 
-async function runSimulation(segments, elevations, params, forced = [], waypointIndexes = []) {
-    const { batteryKwh, startSocPct, thresholdSocPct } = params;
+async function runSimulation(segments, elevations, params, forced = [], waypointIndexes = [], isUpboundTrip) {
+    const { batteryKwh, startSocPct, thresholdSocPct, tripDate, startHour } = params;
     let socKwh = (startSocPct / 100) * batteryKwh, km = 0, time = 0;
     const profile = [], stops = [], fcs = [...forced];
     let pending = null, lastChargeKm = -999;
     let isDead = false, deadLocation = null, warningLocation = null, warningKm = 0;
+    
+    let lastWeatherKm = -999, curBaseTemp = 15, lastWeatherElev = 0;
+    let tempSum = 0, tempCount = 0;
 
     for (let i = 0; i < segments.length; i++) {
         const s = segments[i];
@@ -282,17 +269,37 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
         const elevIdx = Math.floor(progress * elevations.length);
         const currentElev = elevations[elevIdx] || 0;
         
+        // ★ 気温の動的再評価（距離50kmごと）
+        if (km - lastWeatherKm >= 50) {
+            showLoading(`環境データ解析中: ${km.toFixed(0)}km地点のベース気温を取得...`);
+            curBaseTemp = await fetchTemp(s.lat, s.lng, tripDate);
+            lastWeatherKm = km;
+            lastWeatherElev = currentElev;
+        }
+
+        // ★ 気温モデル: 標高減率(-0.6℃/100m) + 時間帯による日内変動(サイン波で±4℃)
+        const currentHourOfDay = (startHour + (time / 60)) % 24;
+        const diurnalVar = 4 * Math.sin((currentHourOfDay - 8) * Math.PI / 12); 
+        const localTemp = curBaseTemp - ((currentElev - lastWeatherElev) / 100 * 0.6) + diurnalVar;
+        tempSum += localTemp; tempCount++;
+        
         const elevDiff = i < segments.length-1 ? ((elevations[Math.floor(((i+1)/segments.length)*elevations.length)]||0) - currentElev) : 0;
         const elevEnergy = (elevDiff * 2200 * 9.8) / 3.6e6;
-        const baseEff = s.speed > 80 ? 5.0 : 7.0; 
-        const energy = (s.distKm / baseEff) + elevEnergy;
-        const currentSoc = (socKwh / batteryKwh) * 100;
+        
+        // ★ 電費の無段階カーブ (速度の二次関数)
+        const baseEff = Math.max(3.0, 8.5 - (s.speed * 0.025) - (Math.pow(s.speed, 2) * 0.0001));
+        
+        const heatingKw = localTemp < 20 ? (20 - localTemp) * 0.15 : 0;
+        const segmentHours = (s.distKm / s.speed);
+        const heatingEnergy = heatingKw * segmentHours;
+
+        const energy = (s.distKm / baseEff) + elevEnergy + heatingEnergy;
+        let currentSoc = (socKwh / batteryKwh) * 100;
 
         if (currentSoc <= 20 && !warningLocation) {
             warningLocation = { lat: s.lat, lng: s.lng };
             warningKm = km;
         }
-
         if (currentSoc <= 0) {
             profile.push({ km, time, soc: 0, speed: 0, elev: currentElev });
             isDead = true;
@@ -300,23 +307,45 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
             break; 
         }
 
+        // 充電処理モジュール
+        const processCharge = (chargerInfo, duration) => {
+            const chg = { km, charger: chargerInfo, socBefore: currentSoc, time, duration };
+            const isFlash = chargerInfo.name.toUpperCase().includes('FLASH');
+            const maxKw = parseInt(chargerInfo.powerKw) || 50;
+            let maxDemanded = 0;
+
+            for (let t = 1; t <= duration; t++) {
+                if (currentSoc >= 100) { currentSoc = 100; break; }
+                let vehicleMax = getVehicleAcceptanceKw(currentSoc);
+                maxDemanded = Math.max(maxDemanded, vehicleMax);
+                let chargerMax = maxKw;
+                
+                if (!isFlash && maxKw > 90) {
+                    if (t <= 15) chargerMax = maxKw;
+                    else if (t <= 25) chargerMax = maxDemanded > 130 ? 90 : 130;
+                    else chargerMax = 90;
+                }
+
+                let actualKw = Math.min(vehicleMax, chargerMax);
+                currentSoc += (actualKw / 60) / batteryKwh * 100;
+                time++;
+                
+                // ★ グラフの直線化を防ぐため、5分おきに軌跡をプロット
+                if (t % 5 === 0 || t === duration) {
+                    profile.push({ km, time, soc: currentSoc, speed: 0, elev: currentElev });
+                }
+            }
+            chg.socAfter = currentSoc;
+            stops.push(chg);
+            socKwh = (currentSoc / 100) * batteryKwh;
+            lastChargeKm = km;
+        };
+
         if (waypointIndexes.includes(i)) {
             const wpIndex = waypointIndexes.indexOf(i);
             const wpName = userWaypoints[wpIndex] ? userWaypoints[wpIndex].name : "下道EV充電スタンド";
             const chgKey = `${s.lat.toFixed(4)},${s.lng.toFixed(4)}`;
-            const duration = userCustomDurations[chgKey] || 30; 
-
-            const chg = { km, charger: {name: `🆘 ${wpName}`, lat: s.lat, lng: s.lng, powerKw: '50'}, socBefore: currentSoc, time, duration };
-            // ★ 新しい充電シミュレータを使用
-            chg.socAfter = calculateCharging(currentSoc, duration, chg.charger.name, chg.charger.powerKw);
-            stops.push(chg);
-            
-            profile.push({ km, time, soc: currentSoc, speed: 0, elev: currentElev });
-            time += duration; 
-            socKwh = (chg.socAfter / 100) * batteryKwh;
-            profile.push({ km, time, soc: chg.socAfter, speed: 0, elev: currentElev });
-            
-            lastChargeKm = km;
+            processCharge({name: `🆘 ${wpName}`, lat: s.lat, lng: s.lng, powerKw: '50'}, userCustomDurations[chgKey] || 30);
         }
 
         let fc = fcs.find(f => haversine(f.lat, f.lng, s.lat, s.lng) < 3.0);
@@ -324,36 +353,30 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
 
         if (pending && i >= pending.targetIdx) {
             const chgKey = `${pending.lat.toFixed(4)},${pending.lng.toFixed(4)}`;
-            const duration = userCustomDurations[chgKey] || 30; 
-
-            const chg = { km, charger: pending, socBefore: currentSoc, time, duration };
-            // ★ 新しい充電シミュレータを使用
-            chg.socAfter = calculateCharging(currentSoc, duration, pending.name, pending.powerKw);
-            stops.push(chg);
-            
-            profile.push({ km, time, soc: currentSoc, speed: 0, elev: currentElev });
-            time += duration; 
-            socKwh = (chg.socAfter / 100) * batteryKwh;
-            profile.push({ km, time, soc: chg.socAfter, speed: 0, elev: currentElev });
-            
-            lastChargeKm = km; pending = null;
+            processCharge(pending, userCustomDurations[chgKey] || 30);
+            pending = null;
         }
 
+        // 自動サーチ：方向判定＆除外判定をパスしたものを検索
         if (!pending && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 50) {
             const found = chargerDB.find(c => {
                 const chgKey = `${c.lat.toFixed(4)},${c.lng.toFixed(4)}`;
-                return haversine(c.lat, c.lng, s.lat, s.lng) < 3.0 && !userIgnoredChargers.includes(chgKey);
+                return haversine(c.lat, c.lng, s.lat, s.lng) < 3.0 
+                    && !userIgnoredChargers.includes(chgKey)
+                    && isValidDirection(c.name, isUpboundTrip); // ★ 方向チェック
             });
             if (found) { found.targetIdx = i + 5; pending = found; }
         }
 
         socKwh = Math.max(0, socKwh - energy);
-        km += s.distKm; time += (s.distKm / s.speed) * 60;
+        km += s.distKm; 
+        time += (s.distKm / s.speed) * 60;
         profile.push({ km, time, soc: (socKwh / batteryKwh) * 100, speed: s.speed, elev: currentElev });
     }
     
     warningLocation = warningLocation || deadLocation;
-    return { profile, stops, arrivalSoc: isDead ? 0 : (socKwh / batteryKwh) * 100, eta: time, isDead, deadKm: km, deadLocation, warningLocation, warningKm };
+    const avgTemp = tempCount > 0 ? tempSum / tempCount : 15;
+    return { profile, stops, arrivalSoc: isDead ? 0 : (socKwh / batteryKwh) * 100, eta: time, isDead, deadKm: km, deadLocation, warningLocation, warningKm, avgTemp };
 }
 
 async function onCalculate() {
@@ -361,6 +384,9 @@ async function onCalculate() {
     showLoading('最適なルートを計算中...');
     const origin = document.getElementById('origin').value;
     const dest = document.getElementById('dest').value;
+    const tripDate = document.getElementById('trip-date').value;
+    const startTimeStr = document.getElementById('start-time').value;
+    const startHour = parseInt(startTimeStr.split(':')[0]) + (parseInt(startTimeStr.split(':')[1]) / 60);
     document.getElementById('dead-alert').style.display = 'none';
 
     directionsService.route({ 
@@ -370,6 +396,13 @@ async function onCalculate() {
         waypoints: userWaypoints.map(w => ({ location: new google.maps.LatLng(w.lat, w.lng), stopover: true }))
     }, async (res, status) => {
         if (status !== 'OK') return hideLoading() || alert('ルートが見つかりません');
+
+        // ★ 全体の進行方向（上り/下り）を判定。東京（35.68, 139.76）に近づくなら上り。
+        const origLoc = res.routes[0].legs[0].start_location;
+        const destLoc = res.routes[0].legs[res.routes[0].legs.length - 1].end_location;
+        const startToTokyo = haversine(origLoc.lat(), origLoc.lng(), 35.68, 139.76);
+        const destToTokyo = haversine(destLoc.lat(), destLoc.lng(), 35.68, 139.76);
+        currentTripIsUpbound = destToTokyo < startToTokyo;
 
         currentDetailedPath = res.routes[0].legs.flatMap(leg => leg.steps.flatMap(s => s.path));
         
@@ -385,25 +418,23 @@ async function onCalculate() {
                     segments.push({ distKm, speed, lat: path[i].lat(), lng: path[i].lng() });
                 }
             });
-            if (legIdx < res.routes[0].legs.length - 1) {
-                waypointIndexes.push(segments.length - 1);
-            }
+            if (legIdx < res.routes[0].legs.length - 1) waypointIndexes.push(segments.length - 1);
         });
 
         const overviewPath = res.routes[0].overview_path;
         elevationService.getElevationForLocations({ locations: overviewPath.length > 250 ? overviewPath.filter((_,i)=>i%Math.ceil(overviewPath.length/250)===0) : overviewPath }, async (elevRes) => {
             const elevations = new Array(overviewPath.length).fill(0);
             if(elevRes) {
-                for(let i=0; i<elevRes.length; i++) {
-                    elevations[i] = elevRes[i].elevation || 0;
-                }
+                for(let i=0; i<elevRes.length; i++) elevations[i] = elevRes[i].elevation || 0;
             }
 
             currentSim = await runSimulation(segments, elevations, {
                 batteryKwh: 71.4,
                 startSocPct: parseFloat(document.getElementById('start-soc').value),
-                thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value)
-            }, userForcedChargers, waypointIndexes);
+                thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value),
+                tripDate: tripDate,
+                startHour: startHour
+            }, userForcedChargers, waypointIndexes, currentTripIsUpbound);
 
             if (currentSim.isDead) {
                 const alertEl = document.getElementById('dead-alert');
@@ -421,6 +452,7 @@ async function onCalculate() {
             document.getElementById('results').style.display = 'block';
             document.getElementById('r-soc').textContent = currentSim.isDead ? '0%' : currentSim.arrivalSoc.toFixed(0) + '%';
             document.getElementById('r-eta').textContent = Math.floor(currentSim.eta / 60) + 'h ' + Math.round(currentSim.eta % 60) + 'm';
+            document.getElementById('r-temp').textContent = currentSim.avgTemp.toFixed(1) + '℃'; 
 
             const list = document.getElementById('stop-list'); 
             list.innerHTML = '';
@@ -430,7 +462,6 @@ async function onCalculate() {
                 const st = currentSim.stops[idx];
                 const isEmergency = st.charger.name.includes("🆘");
                 const pois = isEmergency ? [] : await findNearbyPOIs(st.charger.lat, st.charger.lng);
-                
                 const kw = st.charger.powerKw ? `${st.charger.powerKw}kW` : '出力不明';
                 const authNetwork = isEmergency ? '各種アプリ/クレカ' : getAuthNetwork(st.charger.name);
 
@@ -439,21 +470,18 @@ async function onCalculate() {
                 
                 div.innerHTML = `
                     <div style="font-weight:700; color:var(--text); font-size:1.1rem; margin-bottom:6px;">${st.charger.name}</div>
-                    
                     <div class="chg-specs">
                         <span class="chg-chip chip-kw">⚡ ${kw}</span>
                         <span class="chg-chip chip-auth">📱 ${authNetwork}</span>
                     </div>
-
                     <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">到着 ${st.socBefore.toFixed(0)}% <span style="color:var(--accent2)">➔</span> 出発 ${st.socAfter.toFixed(0)}%</div>
                     <div>${pois.length ? pois.map(p=>`<span class="poi-tag">#${p}</span>`).join('') : ''}</div>
-                    
                     <div style="margin-top:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                         <select onchange="updateChgTime(${st.charger.lat}, ${st.charger.lng}, this.value)" style="width:auto; padding:6px; font-size:12px;">
                             <option value="15" ${st.duration == 15 ? 'selected' : ''}>⏱ 15分充電</option>
                             <option value="30" ${st.duration == 30 ? 'selected' : ''}>⏱ 30分充電</option>
                             <option value="45" ${st.duration == 45 ? 'selected' : ''}>⏱ 45分充電</option>
-                            <option value="60" ${st.duration == 60 ? 'selected' : ''}>⏱ 60分充電 (満充電推奨)</option>
+                            <option value="60" ${st.duration == 60 ? 'selected' : ''}>⏱ 60分充電</option>
                         </select>
                         ${!isEmergency ? `
                             <button class="alt-charger-btn" style="margin-top:0;" onclick="showAlts(${idx})">⟳ SA変更</button>
@@ -597,7 +625,7 @@ window.showAlts = function(idx) {
             const direction = distToDest < curDistToDest ? '奥（先）' : '手前'; 
             return { ...c, dist: distToCur, direction };
         })
-        .filter(c => c.dist > 0.1 && c.dist < 60 && c.type === 'sa_pa')
+        .filter(c => c.dist > 0.1 && c.dist < 60 && c.type === 'sa_pa' && isValidDirection(c.name, currentTripIsUpbound))
         .sort((a, b) => a.dist - b.dist)
         .slice(0, 5);
     
@@ -709,6 +737,10 @@ function hideLoading() { document.getElementById('loading').classList.remove('sh
 window.onload = () => {
     const key = localStorage.getItem('gmaps_key');
     if (key) document.getElementById('api-key').value = key;
+    
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('trip-date').value = today;
+
     document.getElementById('api-key').addEventListener('change', (e) => {
         localStorage.setItem('gmaps_key', e.target.value);
         location.reload();
