@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BZ4X Adaptive Predictor v3</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<script src="chargers_data.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0f172a; --panel: #1e293b; --border: #334155;
+  --accent: #3b82f6; --accent2: #06b6d4;
+  --text: #f1f5f9; --muted: #94a3b8;
+  --green: #22c55e; --amber: #f59e0b; --red: #ef4444;
+  --radius: 8px;
+}
+body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; min-height: 100vh; }
+#app { display: flex; height: 100vh; overflow: hidden; }
+#left { width: 340px; min-width: 280px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; }
+#right { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
+.section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.field { margin-bottom: 10px; }
+label { display: block; font-size: .75rem; color: var(--muted); margin-bottom: 3px; }
+input, select { width: 100%; background: #0f172a; border: 1px solid var(--border); color: var(--text); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; }
+#calc-btn { width: 100%; padding: 12px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 10px; }
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat { background: #0f172a; border-radius: var(--radius); padding: 10px; text-align: center; }
+.stat .val { font-size: 1.2rem; font-weight: 700; color: var(--accent2); }
+.stop-item { background: #0f172a; border-radius: var(--radius); padding: 12px; margin-bottom: 8px; border-left: 4px solid var(--green); }
+#map { flex-shrink: 0; height: 350px; background: #1e293b; }
+.chart-wrap { padding: 16px; border-bottom: 1px solid var(--border); position: relative; min-height: 220px; }
+.chart-ctrl { position: absolute; top: 12px; right: 16px; z-index: 10; display: flex; gap: 4px; }
+.ctrl-btn { background: #334155; border: none; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+.ctrl-btn.active { background: var(--accent2); }
+#loading { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.8); z-index: 9999; align-items: center; justify-content: center; flex-direction: column; gap: 12px; }
+#loading.show { display: flex; }
+.spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent2); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.alt-charger-btn { background: #1e293b; border: 1px solid var(--border); color: var(--accent2); border-radius: 4px; padding: 4px; font-size: .7rem; cursor: pointer; margin-top: 6px; width: 100%; }
+.alt-list { display: none; margin-top: 5px; flex-direction: column; gap: 3px; }
+.alt-opt { background: #0b1120; border: 1px solid var(--border); color: #fff; padding: 6px; font-size: 11px; text-align: left; cursor: pointer; border-radius: 4px; }
+.alt-opt:hover { border-color: var(--accent2); }
+@media (max-width: 860px) {
+  #app { flex-direction: column; height: auto; overflow: visible; }
+  #left { width: 100%; border-right: none; }
+  #map { height: 300px; }
+}
+</style>
+</head>
+<body>
+<div id="loading"><div class="spinner"></div><div id="loading-msg">計算中...</div></div>
+<div id="app">
+  <div id="left">
+    <div class="section"><h1>BZ4X Trip Optimizer</h1></div>
+    <div class="section">
+      <label>Google Maps API Key</label>
+      <input type="password" id="api-key" placeholder="APIキーを入力">
+    </div>
+    <div class="section">
+      <div class="field"><label>予定日</label><input type="date" id="trip-date"></div>
+      <div class="field"><label>出発地</label><input type="text" id="origin" value="東京駅"></div>
+      <div class="field"><label>目的地</label><input type="text" id="dest" value="大阪駅"></div>
+      <div class="row2">
+        <div class="field"><label>出発SOC (%)</label><input type="number" id="start-soc" value="100"></div>
+        <div class="field"><label>充電閾値 (%)</label><input type="number" id="threshold-soc" value="20"></div>
+      </div>
+      <button id="calc-btn">シミュレーション開始</button>
+    </div>
+    <div class="section" id="results" style="display:none">
+      <div class="stat-grid">
+        <div class="stat"><div class="val" id="r-eta">--:--</div><div class="lbl">所要時間</div></div>
+        <div class="stat"><div class="val" id="r-soc">--%</div><div class="lbl">到着SOC</div></div>
+      </div>
+      <div id="stop-list" style="margin-top:15px"></div>
+    </div>
+  </div>
+  <div id="right">
+    <div id="map"></div>
+    <div class="chart-wrap">
+      <div class="chart-ctrl">
+        <button class="ctrl-btn active" id="btn-time" onclick="setAxis('time')">時間軸</button>
+        <button class="ctrl-btn" id="btn-dist" onclick="setAxis('dist')">距離軸</button>
+      </div>
+      <canvas id="soc-chart"></canvas>
+    </div>
+    <div class="chart-wrap"><canvas id="elev-chart"></canvas></div>
+  </div>
+</div>
+
+<script>
+let googleMap, directionsService, elevationService, placesService;
+let chargerDB = (typeof CHARGER_DATA !== 'undefined') ? CHARGER_DATA : [];
+let currentSim = null, currentAxis = 'time', routePolylines = [], userForced = [];
+
+async function fetchTemp(lat, lng, dateStr) {
+    const month = dateStr ? new Date(dateStr).getMonth() + 1 : 4;
+    try {
+        const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lng}&start_date=2023-${String(month).padStart(2,'0')}-01&end_date=2023-${String(month).padStart(2,'0')}-05&daily=temperature_2m_mean&timezone=Asia%2FTokyo`;
+        const r = await fetch(url);
+        const d = await r.json();
+        return d.daily.temperature_2m_mean[0] || 15;
+    } catch(e) { return 15; }
+}
+
+function initMaps() {
+  googleMap = new google.maps.Map(document.getElementById('map'), {
+    center: { lat: 36, lng: 138 }, zoom: 6, styles: [{elementType:'geometry',stylers:[{color:'#1e293b'}]},{featureType:'water',stylers:[{color:'#0f172a'}]}]
+  });
+  directionsService = new google.maps.DirectionsService();
+  elevationService = new google.maps.ElevationService();
+  placesService = new google.maps.places.PlacesService(googleMap);
+  const key = localStorage.getItem('gmaps_key');
+  if(key) document.getElementById('api-key').value = key;
+}
+
+function haversine(l1, g1, l2, g2) {
+    const R=6371, dL=(l2-l1)*Math.PI/180, dG=(g2-g1)*Math.PI/180;
+    const a=Math.sin(dL/2)**2 + Math.cos(l1*Math.PI/180)*Math.cos(l2*Math.PI/180)*Math.sin(dG/2)**2;
+    return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+async function runSimulation(segments, elevations, dateStr, params, forced = []) {
+  const { batteryKwh, startSocPct, thresholdSocPct } = params;
+  let socKwh = (startSocPct/100)*batteryKwh, km = 0, time = 0;
+  let lastWeatherKm = -999, curTemp = 20, lastChargeKm = -999;
+  const profile = [], stops = [], fcs = [...forced];
+  let pending = null;
+
+  for (let i = 0; i < segments.length; i++) {
+    const s = segments[i];
+    if (Math.abs(km - lastWeatherKm) > 100) {
+        curTemp = await fetchTemp(s.lat, s.lng, dateStr);
+        lastWeatherKm = km;
+    }
+    const tempFactor = 1.0 - (curTemp < 20 ? (20 - curTemp) * 0.015 : 0);
+    const baseEff = s.speed > 75 ? 4.8 : 7.2;
+    const energy = (s.distKm / (baseEff * tempFactor)) + ((elevations[i+1]-elevations[i])*2200*9.8/3.6e6);
+    const currentSoc = (socKwh/batteryKwh)*100;
+
+    if (pending && i >= pending.targetIdx) {
+      const chg = { km, charger: pending, socBefore: currentSoc, time };
+      chg.duration = 30; chg.socAfter = Math.min(85, currentSoc + (50/60*30/batteryKwh*100));
+      stops.push(chg);
+      profile.push({ xDist: km, xTime: time, ySoc: currentSoc, lat: s.lat, lng: s.lng, isStop: true });
+      time += 30; socKwh = (chg.socAfter/100)*batteryKwh;
+      profile.push({ xDist: km, xTime: time, ySoc: chg.socAfter, lat: s.lat, lng: s.lng });
+      lastChargeKm = km; pending = null;
+    }
+
+    let fc = fcs.find(f => Math.abs(f.targetIdx - i) < 5);
+    if (fc) { pending = fc; fcs.splice(fcs.indexOf(fc), 1); }
+
+    if (!pending && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 20) {
+      const found = chargerDB.find(c => haversine(c.lat, c.lng, s.lat, s.lng) < 3.0);
+      if (found) { found.targetIdx = i + 1; pending = found; }
+    }
+
+    socKwh = Math.max(0, socKwh - energy);
+    km += s.distKm; time += (s.distKm/s.speed)*60;
+    profile.push({ xDist: km, xTime: time, ySoc: (socKwh/batteryKwh)*100, lat: s.lat, lng: s.lng });
+  }
+  return { profile, stops, arrivalSoc: (socKwh/batteryKwh)*100, eta: time };
+}
+
+function setAxis(a) {
+    currentAxis = a;
+    document.getElementById('btn-time').classList.toggle('active', a==='time');
+    document.getElementById('btn-dist').classList.toggle('active', a==='dist');
+    renderCharts();
+}
+
+function renderCharts() {
+  if (!currentSim) return;
+  const socData = currentSim.profile.map(p => ({ x: currentAxis==='time'?p.xTime:p.xDist, y: p.ySoc, soc: p.ySoc }));
+  if (socChart) socChart.destroy();
+  socChart = new Chart(document.getElementById('soc-chart'), {
+    type: 'line', data: { datasets: [{ data: socData, pointRadius: 0, borderWidth: 3, segment: { borderColor: ctx => {
+      const s = ctx.p1.raw.soc; return `rgb(${Math.floor((100-s)*5)}, 100, ${Math.floor(s*2.5)})`;
+    }}}]},
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { x: { type: 'linear', ticks: { callback: v => currentAxis==='time'?Math.floor(v/60)+'h'+Math.round(v%60)+'m' : v.toFixed(0)+'km'} } }
+    }
+  });
+
+  if (elevChart) elevChart.destroy();
+  elevChart = new Chart(document.getElementById('elev-chart'), {
+    type: 'line', data: { datasets: [{ data: currentSim.profile.map(p => ({x:p.xDist, y:p.ySoc})), pointRadius:0, fill:true, borderColor: '#06b6d4', backgroundColor:'rgba(6,182,212,0.1)' }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { display: false } } }
+  });
+
+  routePolylines.forEach(p => p.setMap(null)); routePolylines = [];
+  for(let i=0; i<currentSim.profile.length-1; i+=2) {
+    const p1 = currentSim.profile[i], p2 = currentSim.profile[i+1];
+    if(!p1.lat) continue;
+    const s = p1.ySoc;
+    routePolylines.push(new google.maps.Polyline({
+      path: [{lat:p1.lat, lng:p1.lng}, {lat:p2.lat, lng:p2.lng}],
+      strokeColor: `rgb(${Math.floor((100-s)*5)}, 100, ${Math.floor(s*2.5)})`, strokeWeight: 5, map: googleMap
+    }));
+  }
+}
+
+async function onCalculate() {
+  const key = document.getElementById('api-key').value;
+  if(!key) return alert('API Key required');
+  localStorage.setItem('gmaps_key', key);
+  showLoading('計算中...');
+  
+  directionsService.route({
+    origin: document.getElementById('origin').value, destination: document.getElementById('dest').value, travelMode: 'DRIVING'
+  }, async (res, status) => {
+    if(status!=='OK') return hideLoading()||alert('Route failed');
+    const steps = res.routes[0].legs[0].steps;
+    const segments = steps.map(s => ({ distKm: s.distance.value/1000, speed: (s.distance.value/s.duration.value)*3.6||60, lat: s.start_location.lat(), lng: s.start_location.lng() }));
+    
+    currentSim = await runSimulation(segments, new Array(segments.length+1).fill(0), document.getElementById('trip-date').value, {
+        batteryKwh: 71.4, startSocPct: parseFloat(document.getElementById('start-soc').value), thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value)
+    }, userForced);
+
+    document.getElementById('results').style.display = 'block';
+    document.getElementById('r-soc').textContent = currentSim.arrivalSoc.toFixed(0) + '%';
+    document.getElementById('r-eta').textContent = Math.floor(currentSim.eta/60) + '時間';
+
+    const list = document.getElementById('stop-list'); list.innerHTML = '';
+    currentSim.stops.forEach((st, idx) => {
+      const div = document.createElement('div'); div.className = 'stop-item';
+      div.innerHTML = `<b>${st.charger.name}</b><br><small>到着SOC: ${st.socBefore.toFixed(0)}%</small>
+        <button class="alt-charger-btn" onclick="showAlts(${idx})">▲▼ 前後の充電器を選択</button>
+        <div class="alt-list" id="alt-list-${idx}"></div>`;
+      list.appendChild(div);
+    });
+    renderCharts();
+    hideLoading();
+  });
+}
+
+function showAlts(idx) {
+    const el = document.getElementById(`alt-list-${idx}`);
+    el.style.display = el.style.display === 'flex' ? 'none' : 'flex';
+    if (el.innerHTML) return;
+    const curStop = currentSim.stops[idx];
+    const alts = chargerDB.filter(c => {
+        const d = haversine(c.lat, c.lng, curStop.charger.lat, curStop.charger.lng);
+        return d < 50 && c.type === 'sa_pa';
+    }).slice(0, 5);
+    el.innerHTML = alts.map(a => `<div class="alt-opt" onclick="forceChg(${idx}, ${a.lat}, ${a.lng})">${a.name} (${a.powerKw}kW)</div>`).join('');
+}
+
+async function forceChg(idx, lat, lng) {
+    const found = chargerDB.find(c => c.lat === lat && c.lng === lng);
+    // ターゲットインデックスを概算
+    let bestIdx = 0, minD = 999;
+    currentSim.profile.forEach((p, i) => {
+        const d = haversine(p.lat, p.lng, lat, lng);
+        if(d < minD) { minD = d; bestIdx = i; }
+    });
+    found.targetIdx = bestIdx;
+    userForced.push(found);
+    await onCalculate();
+}
+
+function showLoading(m) { document.getElementById('loading-msg').textContent=m; document.getElementById('loading').classList.add('show'); }
+function hideLoading() { document.getElementById('loading').classList.remove('show'); }
+
+window.onload = () => {
+  const k = localStorage.getItem('gmaps_key');
+  if(k) {
+    const s = document.createElement('script');
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${k}&libraries=places&callback=initMaps`;
+    document.head.appendChild(s);
+  }
+};
+</script>
+</body>
+</html>
