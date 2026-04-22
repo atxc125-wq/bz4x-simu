@@ -41,7 +41,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
 .stat .lbl { font-size: 0.65rem; }
 
 .stop-item { background: #0f172a; border-radius: 8px; padding: 16px; margin-bottom: 12px; border-left: 4px solid #10b981; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.chg-specs { display: flex; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.chg-specs { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .chg-chip { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
 .chip-kw { background: rgba(6, 182, 212, 0.15); color: var(--accent2); border: 1px solid rgba(6, 182, 212, 0.3); }
 .chip-auth { background: rgba(59, 130, 246, 0.15); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.3); }
@@ -85,9 +85,11 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
             <div class="field" style="margin-bottom:0;"><label>予定日</label><input type="date" id="trip-date"></div>
             <div class="field" style="margin-bottom:0;"><label>出発時間</label><input type="time" id="start-time" value="08:00"></div>
         </div>
+        
         <div class="field"><label>出発地</label><input type="text" id="origin" value="東京"></div>
         <div class="field"><label>経由地 (往復の場合は目的地)</label><input type="text" id="waypoint" placeholder="例: 大阪城"></div>
-        <div class="field"><label>目的地 (往復の場合は出発地)</label><input type="text" id="dest" value="東京"></div>
+        <div class="field"><label>目的地 (往復の場合は出発地)</label><input type="text" id="dest" value="大阪"></div>
+        
         <div class="stat-grid" style="grid-template-columns: 1fr 1fr;">
             <div class="field"><label>出発SOC (%)</label><input type="number" id="start-soc" value="100"></div>
             <div class="field"><label>充電閾値 (%)</label><input type="number" id="threshold-soc" value="20"></div>
@@ -131,7 +133,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
 <script>
 let googleMap, directionsService, placesService, elevationService;
 let chargerDB = (typeof CHARGER_DATA !== 'undefined') ? CHARGER_DATA : [];
-let currentSim = null, currentDetailedPath = null, currentTripIsUpbound = false;
+let currentSim = null, currentDetailedPath = null;
 let routePolylines = [], comboChart = null, mapMarkers = [], emergencyMarkers = [];
 let userWaypoints = []; 
 let autoChargers = []; 
@@ -164,7 +166,7 @@ function initApp() {
     placesService = new google.maps.places.PlacesService(googleMap);
     
     new google.maps.places.Autocomplete(document.getElementById('origin'));
-    new google.maps.places.Autocomplete(document.getElementById('waypoint'));
+    new google.maps.places.Autocomplete(document.getElementById('waypoint')); // ★ 復活
     new google.maps.places.Autocomplete(document.getElementById('dest'));
     
     document.getElementById('calc-btn').addEventListener('click', () => { 
@@ -192,7 +194,6 @@ function getRouteColor(val, mode) {
     }
 }
 
-// ★ 200kW超えはFLASHと同等の水冷超高出力ネットワークとみなすロジックに変更
 function getAuthNetwork(name, powerKw) {
     const n = name.toUpperCase();
     if (n.includes('TESLA') || n.includes('テスラ')) return 'Tesla';
@@ -233,7 +234,6 @@ function getVehicleAcceptanceKw(soc) {
 function calculateCharging(startSoc, durationMins, chargerInfo) {
     const batteryKwh = 71.4;
     let currentSoc = startSoc, maxDemanded = 0;
-    // ★ ここも出力200kW以上なら熱ダレなしと判定
     const isFlash = chargerInfo.name.toUpperCase().includes('FLASH') || chargerInfo.name.includes('フラッシュ') || parseInt(chargerInfo.powerKw) >= 200;
     const maxKw = parseInt(chargerInfo.powerKw) || 50;
 
@@ -252,12 +252,12 @@ function calculateCharging(startSoc, durationMins, chargerInfo) {
     return Math.min(100, currentSoc);
 }
 
-function isValidDirection(chgName, isUpboundTrip) {
+function isValidDirection(chgName, isUpbound) {
     if (!chgName) return true;
     const isUpChg = chgName.includes('上り');
     const isDownChg = chgName.includes('下り');
-    if (isUpboundTrip && isDownChg) return false;
-    if (!isUpboundTrip && isUpChg) return false;
+    if (isUpbound && isDownChg) return false;
+    if (!isUpbound && isUpChg) return false;
     return true; 
 }
 
@@ -274,44 +274,108 @@ async function findNearbyPOIs(lat, lng) {
   return results;
 }
 
-async function runSimulation(segments, elevations, params, isUpboundTrip) {
+async function runSimulation(segments, elevations, params, waypointIndexes, isUpboundLegs) {
     const { batteryKwh, startSocPct, thresholdSocPct, tripDate, startHour } = params;
     let socKwh = (startSocPct / 100) * batteryKwh, km = 0, time = 0;
     const profile = [], stops = [];
-    let lastChargeKm = -999, lastWeatherKm = -999, curBaseTemp = 15;
-    let isDead = false, deadLocation = null, warningLocation = null;
+    let lastChargeKm = -999, lastWeatherKm = -999, curBaseTemp = 15, lastWeatherElev = 0;
+    let isDead = false, deadLocation = null, warningLocation = null, warningKm = 0;
+    let tempSum = 0, tempCount = 0;
     const totalKm = segments.reduce((sum, s) => sum + s.distKm, 0);
+
+    let currentLegIdx = 0;
 
     for (let i = 0; i < segments.length; i++) {
         const s = segments[i];
         const progress = km / totalKm;
         const currentElev = elevations[Math.min(elevations.length-1, Math.floor(progress * elevations.length))] || 0;
         
+        // 経由地を通過したらレグを進める（これで往復時の上り下りが動的に切り替わります）
+        if (waypointIndexes.includes(i)) currentLegIdx++;
+        const currentTripIsUpbound = isUpboundLegs[currentLegIdx] || false;
+
         if (km - lastWeatherKm >= 50) {
             curBaseTemp = await fetchTemp(s.lat, s.lng, tripDate);
             lastWeatherKm = km;
+            lastWeatherElev = currentElev;
         }
 
         const currentHourOfDay = (startHour + (time / 60)) % 24;
         const diurnalVar = 4 * Math.sin((currentHourOfDay - 8) * Math.PI / 12); 
-        const localTemp = curBaseTemp - (currentElev / 100 * 0.6) + diurnalVar;
+        const localTemp = curBaseTemp - ((currentElev - lastWeatherElev) / 100 * 0.6) + diurnalVar;
+        tempSum += localTemp; tempCount++;
+        
+        const nextProgress = (km + s.distKm) / totalKm;
+        const nextElev = elevations[Math.min(elevations.length-1, Math.floor(nextProgress * elevations.length))] || currentElev;
+        const elevEnergy = ((nextElev - currentElev) * 2200 * 9.8) / 3.6e6;
+
         const baseEff = Math.max(3.0, 8.5 - (s.speed * 0.025) - (Math.pow(s.speed, 2) * 0.0001));
         const heatingEnergy = (localTemp < 20 ? (20 - localTemp) * 0.15 : 0) * (s.distKm / s.speed);
-        
-        const energy = (s.distKm / baseEff) + heatingEnergy;
+        const energy = (s.distKm / baseEff) + elevEnergy + heatingEnergy;
         let currentSoc = (socKwh / batteryKwh) * 100;
 
-        if (currentSoc <= 20 && !warningLocation) warningLocation = { lat: s.lat, lng: s.lng };
-        if (currentSoc <= 0) { isDead = true; deadLocation = { lat: s.lat, lng: s.lng }; break; }
+        if (currentSoc <= 20 && !warningLocation) {
+            warningLocation = { lat: s.lat, lng: s.lng };
+            warningKm = km;
+        }
+        if (currentSoc <= 0) {
+            profile.push({ km, time, soc: 0, speed: 0, elev: currentElev });
+            isDead = true;
+            deadLocation = { lat: s.lat, lng: s.lng };
+            break; 
+        }
 
-        if (currentSoc < thresholdSocPct && (km - lastChargeKm) > 40) {
+        const processCharge = (chargerInfo, duration) => {
+            const chg = { km, charger: chargerInfo, socBefore: currentSoc, time, duration };
+            const isFlash = chargerInfo.name.toUpperCase().includes('FLASH') || chargerInfo.name.includes('フラッシュ') || parseInt(chargerInfo.powerKw) >= 200;
+            const maxKw = parseInt(chargerInfo.powerKw) || 50;
+            let maxDemanded = 0;
+
+            for (let t = 1; t <= duration; t++) {
+                if (currentSoc >= 100) { currentSoc = 100; break; }
+                let vehicleMax = getVehicleAcceptanceKw(currentSoc);
+                maxDemanded = Math.max(maxDemanded, vehicleMax);
+                let chargerMax = maxKw;
+                
+                if (!isFlash && maxKw > 90) {
+                    if (t <= 15) chargerMax = maxKw;
+                    else if (t <= 25) chargerMax = maxDemanded > 130 ? 90 : 130;
+                    else chargerMax = 90;
+                }
+
+                let actualKw = Math.min(vehicleMax, chargerMax);
+                currentSoc += (actualKw / 60) / batteryKwh * 100;
+                time++;
+                
+                if (t % 5 === 0 || t === duration) {
+                    profile.push({ km, time, soc: currentSoc, speed: 0, elev: currentElev });
+                }
+            }
+            chg.socAfter = currentSoc;
+            stops.push(chg);
+            socKwh = (currentSoc / 100) * batteryKwh;
+            lastChargeKm = km;
+        };
+
+        // 自動追加、もしくは手動追加した充電器に到達したか判定
+        const reachedAuto = autoChargers.find(ac => haversine(ac.lat, ac.lng, s.lat, s.lng) < 0.2);
+        const reachedManual = userWaypoints.find(uw => haversine(uw.lat, uw.lng, s.lat, s.lng) < 0.2);
+        const hit = reachedAuto || reachedManual;
+
+        if (hit && (km - lastChargeKm) > 5) {
+            const chgKey = hit.key || `${hit.lat.toFixed(4)},${hit.lng.toFixed(4)}`;
+            const duration = userCustomDurations[chgKey] || 30; 
+            processCharge({name: (hit.isSOS ? `🆘 ` : '') + hit.name, lat: hit.lat, lng: hit.lng, powerKw: hit.powerKw}, duration);
+        }
+
+        // 自動サーチ
+        if (!hit && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 50) {
             const found = chargerDB.find(c => {
                 const dist = haversine(c.lat, c.lng, s.lat, s.lng);
-                const isFlash = c.name.toUpperCase().includes('FLASH') || parseInt(c.powerKw) >= 200;
+                const isFlash = c.name.toUpperCase().includes('FLASH') || c.name.includes('フラッシュ') || parseInt(c.powerKw) >= 200;
                 const range = isFlash ? 7.0 : 0.5;
                 const key = `${c.lat.toFixed(4)},${c.lng.toFixed(4)}`;
-                return dist < range && !userIgnoredChargers.includes(key) && 
-                       (c.name.includes('上り') === isUpboundTrip || c.name.includes('下り') !== isUpboundTrip || !c.name.match(/上り|下り/));
+                return dist < range && !userIgnoredChargers.includes(key) && isValidDirection(c.name, currentTripIsUpbound);
             });
 
             if (found) {
@@ -323,36 +387,23 @@ async function runSimulation(segments, elevations, params, isUpboundTrip) {
             }
         }
 
-        const reachedWp = autoChargers.find(ac => haversine(ac.lat, ac.lng, s.lat, s.lng) < 0.2);
-        const reachedManual = userWaypoints.find(uw => haversine(uw.lat, uw.lng, s.lat, s.lng) < 0.2);
-        const hit = reachedWp || reachedManual;
-
-        if (hit && (km - lastChargeKm) > 5) {
-            const duration = userCustomDurations[hit.key || `${hit.lat.toFixed(4)},${hit.lng.toFixed(4)}`] || 30;
-            const socBefore = currentSoc;
-            for(let t=1; t<=duration; t++) {
-                currentSoc = calculateCharging(currentSoc, 1, hit);
-                if(t%5===0 || t===duration) profile.push({ km, time: time + t, soc: currentSoc, speed: 0, elev: currentElev });
-            }
-            stops.push({ charger: hit, socBefore, socAfter: currentSoc, duration, time });
-            time += duration;
-            socKwh = (currentSoc/100)*batteryKwh;
-            lastChargeKm = km;
-        }
-
         socKwh -= energy;
         km += s.distKm; time += (s.distKm/s.speed)*60;
         profile.push({ km, time, soc: (socKwh/batteryKwh)*100, speed: s.speed, elev: currentElev });
     }
-    return { profile, stops, arrivalSoc: isDead ? 0 : (socKwh/batteryKwh)*100, eta: time, isDead, deadLocation, warningLocation, avgTemp: 15 };
+    
+    warningLocation = warningLocation || deadLocation;
+    const avgTemp = tempCount > 0 ? tempSum / tempCount : 15;
+    return { profile, stops, arrivalSoc: isDead ? 0 : (socKwh/batteryKwh)*100, eta: time, isDead, deadKm: km, deadLocation, warningLocation, warningKm, avgTemp };
 }
 
 async function onCalculate() {
     showLoading('ルート最適化中...');
     const origin = document.getElementById('origin').value;
-    const waypointVal = document.getElementById('waypoint').value;
+    const waypointVal = document.getElementById('waypoint').value; // ★ 無事復活！
     const dest = document.getElementById('dest').value;
 
+    // テキスト経由地と、システムが見つけた充電経由地を合成
     const combinedWps = [...userWaypoints, ...autoChargers].map(w => ({
         location: new google.maps.LatLng(w.lat, w.lng), stopover: true
     }));
@@ -363,14 +414,28 @@ async function onCalculate() {
     directionsService.route({ origin, destination: dest, waypoints: combinedWps, optimizeWaypoints: true, travelMode: 'DRIVING' }, async (res, status) => {
         if (status !== 'OK') return hideLoading() || alert('ルート解析失敗');
 
-        const origLoc = res.routes[0].legs[0].start_location;
-        const destLoc = res.routes[0].legs[res.routes[0].legs.length-1].end_location;
-        currentTripIsUpbound = haversine(destLoc.lat(), destLoc.lng(), 35.68, 139.76) < haversine(origLoc.lat(), origLoc.lng(), 35.68, 139.76);
+        // ★ 各Leg（区間）ごとの上り・下りを判定して配列にする（往復ルートに完璧に対応！）
+        const isUpboundLegs = res.routes[0].legs.map(leg => {
+            const startToTokyo = haversine(leg.start_location.lat(), leg.start_location.lng(), 35.68, 139.76);
+            const endToTokyo = haversine(leg.end_location.lat(), leg.end_location.lng(), 35.68, 139.76);
+            return endToTokyo < startToTokyo;
+        });
 
         currentDetailedPath = res.routes[0].legs.flatMap(l => l.steps.flatMap(s => s.path));
-        const segments = res.routes[0].legs.flatMap(l => l.steps.map(s => ({
-            distKm: s.distance.value/1000, speed: (s.distance.value/s.duration.value)*3.6||60, lat: s.start_location.lat(), lng: s.start_location.lng()
-        })));
+        
+        const segments = [];
+        const waypointIndexes = []; 
+        res.routes[0].legs.forEach((leg, legIdx) => {
+            leg.steps.forEach(step => {
+                const speed = (step.distance.value / step.duration.value) * 3.6 || 60;
+                const path = step.path;
+                for(let i=0; i < path.length - 1; i++) {
+                    const distKm = google.maps.geometry.spherical.computeDistanceBetween(path[i], path[i+1]) / 1000;
+                    segments.push({ distKm, speed, lat: path[i].lat(), lng: path[i].lng() });
+                }
+            });
+            if (legIdx < res.routes[0].legs.length - 1) waypointIndexes.push(segments.length - 1);
+        });
 
         elevationService.getElevationAlongPath({ path: res.routes[0].overview_path, samples: 250 }, async (elevRes) => {
             const elevations = elevRes ? elevRes.map(r => r.elevation) : new Array(250).fill(0);
@@ -380,7 +445,7 @@ async function onCalculate() {
                 thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value),
                 tripDate: document.getElementById('trip-date').value, 
                 startHour: parseInt(document.getElementById('start-time').value.split(':')[0]) + (parseInt(document.getElementById('start-time').value.split(':')[1]) / 60)
-            }, currentTripIsUpbound);
+            }, waypointIndexes, isUpboundLegs);
 
             if (result.requestReroute) return onCalculate();
 
@@ -395,6 +460,7 @@ function renderUI() {
     document.getElementById('results').style.display = 'block';
     document.getElementById('r-soc').textContent = currentSim.isDead ? '0%' : currentSim.arrivalSoc.toFixed(0) + '%';
     document.getElementById('r-eta').textContent = Math.floor(currentSim.eta/60) + 'h ' + Math.round(currentSim.eta%60) + 'm';
+    document.getElementById('r-temp').textContent = currentSim.avgTemp.toFixed(1) + '℃'; 
     
     if (currentSim.isDead) {
         const alertEl = document.getElementById('dead-alert');
@@ -417,7 +483,6 @@ function renderUI() {
         const isEmergency = st.charger.name.includes("🆘");
         if(isEmergency) div.style.borderColor = '#ef4444';
         
-        // ★ 認証方式と出力（UI順序を逆転）
         const kw = st.charger.powerKw ? `${st.charger.powerKw}kW` : '出力不明';
         const authNetwork = isEmergency ? '各種アプリ/クレカ' : getAuthNetwork(st.charger.name, st.charger.powerKw);
 
@@ -446,7 +511,7 @@ function renderUI() {
     });
 
     updateMapDrawing();
-    drawMarkers();
+    drawMarkers(currentDetailedPath[0], currentDetailedPath[currentDetailedPath.length - 1], currentSim.stops, currentSim.isDead ? currentSim.deadLocation : null, currentSim.isDead ? currentSim.warningLocation : null);
     drawComboChart();
 }
 
@@ -463,15 +528,18 @@ function updateMapDrawing() {
     routePolylines.forEach(p => p.setMap(null)); routePolylines = [];
     const chunks = 100;
     const pointsPerChunk = Math.ceil(currentDetailedPath.length / chunks);
+    const validSimLength = currentSim.profile.length;
+    const pathLimit = currentSim.isDead ? Math.floor(currentDetailedPath.length * (validSimLength / currentDetailedPath.length)) : currentDetailedPath.length;
+
     for (let i = 0; i < chunks; i++) {
         const startIdx = i * pointsPerChunk;
-        const endIdx = Math.min((i + 1) * pointsPerChunk, currentDetailedPath.length - 1);
-        if (startIdx >= endIdx) break;
-        const simData = currentSim.profile[Math.min(currentSim.profile.length-1, Math.floor((startIdx/currentDetailedPath.length)*currentSim.profile.length))];
+        if (startIdx >= pathLimit) break;
+        const endIdx = Math.min((i + 1) * pointsPerChunk, pathLimit - 1);
         const mode = document.getElementById('color-mode').value;
+        const simData = currentSim.profile[Math.min(validSimLength - 1, Math.floor((startIdx/currentDetailedPath.length)*validSimLength))];
         const targetVal = mode === 'soc' ? simData.soc : simData.speed;
         routePolylines.push(new google.maps.Polyline({
-            path: currentDetailedPath.slice(startIdx, endIdx + 2), strokeColor: getRouteColor(targetVal, mode), strokeWeight: 6, strokeOpacity: 0.9, map: googleMap
+            path: currentDetailedPath.slice(startIdx, endIdx + 2), strokeColor: getRouteColor(targetVal, mode), strokeWeight: 7, strokeOpacity: 0.9, map: googleMap
         }));
     }
     const bounds = new google.maps.LatLngBounds();
@@ -497,7 +565,7 @@ function searchEmergencyChargers(lat, lng) {
             el.innerHTML = topResults.map((r, i) => `
                 <div class="alt-opt" onclick="addEmergencyWaypoint(${r.geometry.location.lat()}, ${r.geometry.location.lng()}, '${r.name}')" style="border-left: 3px solid #ef4444; background:rgba(239, 68, 68, 0.1); display:flex; align-items:center; gap:8px;">
                     <span style="background:#ef4444; color:#fff; border-radius:50%; min-width:22px; height:22px; display:inline-block; text-align:center; line-height:22px; font-size:12px; font-weight:bold;">${i+1}</span>
-                    <div><div style="font-weight:bold;">${r.name}</div><div style="font-size:10px; color:var(--muted)">ここを経由地にする</div></div>
+                    <div><div style="font-weight:bold;">${r.name}</div><div style="font-size:10px; color:var(--muted)">マップの ${i+1} 番を経由地にする</div></div>
                 </div>
             `).join('');
             const bounds = new google.maps.LatLngBounds();
@@ -513,6 +581,7 @@ function searchEmergencyChargers(lat, lng) {
 window.addEmergencyWaypoint = function(lat, lng, name) {
     userWaypoints.push({ lat, lng, name, powerKw: '50', isSOS: true });
     emergencyMarkers.forEach(m => m.setMap(null)); emergencyMarkers = [];
+    document.getElementById('dead-alert').style.display = 'none';
     onCalculate();
 }
 
@@ -530,7 +599,7 @@ window.showAlts = function(idx) {
         const distToCur = haversine(c.lat, c.lng, curStop.charger.lat, curStop.charger.lng);
         const direction = haversine(c.lat, c.lng, destLat, destLng) < curDistToDest ? '奥（先）' : '手前'; 
         return { ...c, dist: distToCur, direction };
-    }).filter(c => c.dist > 0.1 && c.dist < 60 && c.type === 'sa_pa' && isValidDirection(c.name, currentTripIsUpbound)).sort((a, b) => a.dist - b.dist).slice(0, 5);
+    }).filter(c => c.dist > 0.1 && c.dist < 60 && c.type === 'sa_pa').sort((a, b) => a.dist - b.dist).slice(0, 5);
     
     el.innerHTML = alts.map(a => `
         <div class="alt-opt" onclick="forceChg(${a.lat}, ${a.lng}, ${idx})" style="display:flex; justify-content:space-between; align-items:center;">
@@ -548,20 +617,21 @@ window.forceChg = function(lat, lng, idx) {
     onCalculate();
 }
 
-function drawMarkers() {
+function drawMarkers(originPoint, destPoint, stops, deadPoint, warningPoint) {
     mapMarkers.forEach(m => m.setMap(null)); mapMarkers = [];
-    const addMarker = (pos, lbl, color, z = 1) => {
-        mapMarkers.push(new google.maps.Marker({ position: pos, map: googleMap, label: {text: lbl, color: 'white'}, zIndex: z, icon: color ? {path:google.maps.SymbolPath.CIRCLE, scale:10, fillColor:color, fillOpacity:1, strokeColor:'white'} : null }));
+    const addMarker = (pos, lbl, color, z = 1, title = "") => {
+        mapMarkers.push(new google.maps.Marker({ position: pos, map: googleMap, title: title, label: {text: lbl, color: 'white', fontSize: lbl.length>1?'16px':'14px'}, zIndex: z, icon: color ? {path:google.maps.SymbolPath.CIRCLE, scale:10, fillColor:color, fillOpacity:1, strokeColor:'white', strokeWeight:2} : null }));
     };
-    addMarker(currentDetailedPath[0], 'S', '#3b82f6', 10);
-    addMarker(currentDetailedPath[currentDetailedPath.length-1], 'G', '#ef4444', 10);
-    if(currentSim.isDead) {
-        addMarker(currentSim.deadLocation, '☠️', null, 9999);
-        addMarker(currentSim.warningLocation, '⚠️', null, 9998);
+    addMarker(originPoint, 'S', '#3b82f6', 10);
+    if (!currentSim.isDead) {
+        addMarker(destPoint, 'G', '#ef4444', 10);
+    } else {
+        if(deadPoint) addMarker(deadPoint, '☠️', null, 9999, '電欠地点');
+        if(warningPoint) addMarker(warningPoint, '⚠️', null, 9998, 'SOC 20%地点');
     }
-    currentSim.stops.forEach(st => {
+    stops.forEach(st => {
         mapMarkers.push(new google.maps.Marker({
-            position: {lat: st.charger.lat, lng: st.charger.lng}, map: googleMap, 
+            position: {lat: st.charger.lat, lng: st.charger.lng}, map: googleMap, title: st.charger.name,
             icon: {path: "M7 2v11h3v9l7-12h-4l4-8z", fillColor: st.charger.name.includes("🆘") ? "#ef4444" : "#10b981", fillOpacity: 1, scale: 1.2, strokeColor: "white", strokeWeight: 1}
         }));
     });
@@ -574,6 +644,7 @@ function drawComboChart() {
     const socData = currentSim.profile.map(p => ({ x: getX(p), y: p.soc }));
     const speedData = currentSim.profile.map(p => ({ x: getX(p), y: p.speed }));
     const elevData = currentSim.profile.map(p => ({ x: getX(p), y: Math.max(0, p.elev) }));
+    const mode = document.getElementById('color-mode').value;
     
     comboChart = new Chart(ctx, {
         type: 'line',
@@ -584,37 +655,38 @@ function drawComboChart() {
                     borderColor: (context) => {
                         const chart = context.chart; const {ctx, chartArea} = chart;
                         if (!chartArea) return '#3b82f6';
-                        const gradient = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
-                        gradient.addColorStop(0, '#ef4444'); gradient.addColorStop(0.5, '#eab308'); gradient.addColorStop(1, '#06b6d4');
-                        return gradient;
-                    }
+                        if (mode === 'soc') {
+                            const gradient = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
+                            gradient.addColorStop(0, '#ef4444'); gradient.addColorStop(0.2, '#ef4444'); gradient.addColorStop(0.5, '#eab308'); gradient.addColorStop(1, '#06b6d4');
+                            return gradient;
+                        }
+                        return undefined;
+                    },
+                    segment: { borderColor: ctx => mode === 'speed' ? getRouteColor(ctx.p1.raw.speed, mode) : undefined }
                 },
                 {
-                    // ★ 神機能：速度グラフのオーバーレイ
                     label: '速度 (km/h)', data: speedData, yAxisID: 'y2', borderWidth: 1.5, pointRadius: 0, tension: 0.4, fill: true, backgroundColor: 'rgba(71, 85, 105, 0.05)',
                     borderColor: (context) => {
                         const chart = context.chart; const {ctx, chartArea} = chart;
                         if (!chartArea) return 'rgba(100, 116, 139, 0.4)';
                         const gradient = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
-                        gradient.addColorStop(0, 'rgba(71, 85, 105, 0.2)');     // 低速 (グレー)
-                        gradient.addColorStop(0.4, 'rgba(71, 85, 105, 0.4)');   // 約50km/h (グレー)
-                        gradient.addColorStop(0.7, 'rgba(16, 185, 129, 0.5)');  // 約84km/h (緑)
-                        gradient.addColorStop(1, 'rgba(6, 182, 212, 0.6)');     // 高速 (青)
+                        gradient.addColorStop(0, 'rgba(71, 85, 105, 0.2)');     
+                        gradient.addColorStop(0.4, 'rgba(71, 85, 105, 0.4)');   
+                        gradient.addColorStop(0.7, 'rgba(16, 185, 129, 0.5)');  
+                        gradient.addColorStop(1, 'rgba(6, 182, 212, 0.6)');     
                         return gradient;
                     }
                 },
-                {
-                    label: '標高 (m)', data: elevData, yAxisID: 'y1', borderColor: 'rgba(148, 163, 184, 0.4)', borderWidth: 1, pointRadius: 0, fill: true, backgroundColor: 'rgba(148, 163, 184, 0.05)'
-                }
+                { label: '標高 (m)', data: elevData, yAxisID: 'y1', borderColor: 'rgba(148, 163, 184, 0.4)', borderWidth: 1, pointRadius: 0, fill: true, backgroundColor: 'rgba(148, 163, 184, 0.05)' }
             ]
         },
         options: {
-            responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+            responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: 'rgba(15,23,42,0.9)' } },
             scales: {
                 x: { type: 'linear', ticks: { callback: v => currentAxis==='time'?Math.floor(v/60)+'h'+Math.round(v%60)+'m' : v.toFixed(0)+'km' }, grid: { color: 'rgba(51, 65, 85, 0.3)' } },
                 y: { min: 0, max: 100, position: 'left', grid: { color: 'rgba(51, 65, 85, 0.3)' } },
                 y1: { position: 'right', display: true, grid: { drawOnChartArea: false }, ticks: { color: 'rgba(148, 163, 184, 0.7)' } },
-                y2: { min: 0, suggestedMax: 120, display: false } // ★ 速度用の隠し軸 (0~120km/hスケール)
+                y2: { min: 0, suggestedMax: 120, display: false } 
             }
         }
     });
