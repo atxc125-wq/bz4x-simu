@@ -16,12 +16,10 @@
 }
 body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; margin: 0; }
 
-/* PC向けのレイアウト */
 #app { display: flex; height: 100vh; overflow: hidden; }
 #left { width: 360px; min-width: 320px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; box-shadow: 4px 0 15px rgba(0,0,0,0.3); z-index: 10; }
 #right { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
 
-/* スマホ向けの縦スクロールレイアウト */
 @media (max-width: 860px) {
   #app { flex-direction: column; height: auto; overflow: visible; }
   #left { width: 100%; border-right: none; border-bottom: 1px solid var(--border); overflow-y: visible; box-shadow: none; }
@@ -41,13 +39,11 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
 .stat { background: #0f172a; border-radius: 8px; padding: 12px; text-align: center; border: 1px solid var(--border); }
 .stat .val { font-size: 1.5rem; font-weight: 700; color: var(--accent2); }
 
-/* 充電スポットカード */
 .stop-item { background: #0f172a; border-radius: 8px; padding: 16px; margin-bottom: 12px; border-left: 4px solid #10b981; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .chg-specs { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .chg-chip { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
 .chip-kw { background: rgba(6, 182, 212, 0.15); color: var(--accent2); border: 1px solid rgba(6, 182, 212, 0.3); }
 .chip-auth { background: rgba(59, 130, 246, 0.15); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.3); }
-
 .poi-tag { display: inline-block; background: rgba(148, 163, 184, 0.1); color: #cbd5e1; font-size: 10px; padding: 3px 8px; border-radius: 12px; margin-right: 6px; margin-top: 8px; }
 
 .alt-charger-btn { background: #1e293b; border: 1px solid var(--border); color: var(--accent2); border-radius: 4px; padding: 6px 10px; font-size: 0.75rem; cursor: pointer; transition: 0.2s; white-space: nowrap; }
@@ -125,6 +121,7 @@ let routePolylines = [], comboChart = null, mapMarkers = [], emergencyMarkers = 
 let userForcedChargers = []; 
 let userWaypoints = []; 
 let userCustomDurations = {}; 
+let userIgnoredChargers = []; // ★ 新規追加：意図的に削除した充電器のリスト
 
 Chart.defaults.color = '#94a3b8';
 Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
@@ -157,6 +154,7 @@ function initApp() {
         userForcedChargers = []; 
         userWaypoints = [];
         userCustomDurations = {}; 
+        userIgnoredChargers = []; // 最初の計算時は無視リストもリセット
         onCalculate(); 
     });
     
@@ -165,11 +163,8 @@ function initApp() {
     });
 }
 
-// ★ SOCと速度の両方で共通のグラデーションロジックを使用
 function getRouteColor(val, mode) {
-    // 速度モードの場合、0km(赤) 〜 100km(青) にマッピング
     const pct = mode === 'speed' ? Math.max(0, Math.min(100, val)) : val;
-
     if (pct <= 20) return '#ef4444'; 
     if (pct <= 50) {
         const ratio = (pct - 20) / 30;
@@ -186,7 +181,6 @@ function getRouteColor(val, mode) {
     }
 }
 
-// 簡易的な認証方式の推定ロジック
 function getAuthNetwork(name) {
     const n = name.toUpperCase();
     if (n.includes('TESLA') || n.includes('テスラ')) return 'Tesla';
@@ -235,7 +229,8 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
         const energy = (s.distKm / baseEff) + elevEnergy;
         const currentSoc = (socKwh / batteryKwh) * 100;
 
-        if (currentSoc <= 10 && !warningLocation) {
+        // ★ 閾値を10%から20%に変更
+        if (currentSoc <= 20 && !warningLocation) {
             warningLocation = { lat: s.lat, lng: s.lng };
             warningKm = km;
         }
@@ -284,8 +279,12 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
             lastChargeKm = km; pending = null;
         }
 
+        // 自動サーチ（除外リストにあるスポットは無視する）
         if (!pending && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 50) {
-            const found = chargerDB.find(c => haversine(c.lat, c.lng, s.lat, s.lng) < 3.0);
+            const found = chargerDB.find(c => {
+                const chgKey = `${c.lat.toFixed(4)},${c.lng.toFixed(4)}`;
+                return haversine(c.lat, c.lng, s.lat, s.lng) < 3.0 && !userIgnoredChargers.includes(chgKey);
+            });
             if (found) { found.targetIdx = i + 5; pending = found; }
         }
 
@@ -350,9 +349,10 @@ async function onCalculate() {
             if (currentSim.isDead) {
                 const alertEl = document.getElementById('dead-alert');
                 alertEl.style.display = 'block';
+                // ★ 文言も20%に変更
                 alertEl.innerHTML = `
                     ⚠️ <b>${currentSim.deadKm.toFixed(0)}km地点で電欠しました！</b><br>
-                    <div style="margin-top:10px; font-size:12px; color:var(--text);">電欠する少し前（SOC10%・${currentSim.warningKm.toFixed(0)}km地点付近）で下道に降りて探します。</div>
+                    <div style="margin-top:10px; font-size:12px; color:var(--text);">電欠する少し前（SOC20%・${currentSim.warningKm.toFixed(0)}km地点付近）で下道に降りて探します。</div>
                     <button class="alt-charger-btn" onclick="searchEmergencyChargers(${currentSim.warningLocation.lat}, ${currentSim.warningLocation.lng})" style="margin-top:8px; background:#ef4444; color:#fff; border:none; padding:8px; width:100%;">
                         🆘 周辺のEV充電スタンドを地図に表示
                     </button>
@@ -373,13 +373,13 @@ async function onCalculate() {
                 const isEmergency = st.charger.name.includes("🆘");
                 const pois = isEmergency ? [] : await findNearbyPOIs(st.charger.lat, st.charger.lng);
                 
-                // ★ kWと認証方式の判定
                 const kw = st.charger.powerKw ? `${st.charger.powerKw}kW` : '出力不明';
                 const authNetwork = isEmergency ? '各種アプリ/クレカ' : getAuthNetwork(st.charger.name);
 
                 const div = document.createElement('div'); div.className = 'stop-item';
                 if(isEmergency) div.style.borderColor = '#ef4444';
                 
+                // ★ 削除（除外）ボタンを追加
                 div.innerHTML = `
                     <div style="font-weight:700; color:var(--text); font-size:1.1rem; margin-bottom:6px;">${st.charger.name}</div>
                     
@@ -398,7 +398,12 @@ async function onCalculate() {
                             <option value="45" ${st.duration == 45 ? 'selected' : ''}>⏱ 45分充電</option>
                             <option value="60" ${st.duration == 60 ? 'selected' : ''}>⏱ 60分充電 (満充電推奨)</option>
                         </select>
-                        ${!isEmergency ? `<button class="alt-charger-btn" style="margin-top:0;" onclick="showAlts(${idx})">⟳ 他のSAに変更</button>` : ''}
+                        ${!isEmergency ? `
+                            <button class="alt-charger-btn" style="margin-top:0;" onclick="showAlts(${idx})">⟳ SA変更</button>
+                            <button class="alt-charger-btn" style="margin-top:0; background:rgba(239, 68, 68, 0.2); color:#ef4444; border: 1px solid #ef4444;" onclick="removeChg(${st.charger.lat}, ${st.charger.lng})">✖ 削除</button>
+                        ` : `
+                            <button class="alt-charger-btn" style="margin-top:0; background:rgba(239, 68, 68, 0.2); color:#ef4444; border: 1px solid #ef4444;" onclick="removeChg(${st.charger.lat}, ${st.charger.lng})">✖ 削除</button>
+                        `}
                     </div>
                     ${!isEmergency ? `<div class="alt-list" id="alt-list-${idx}"></div>` : ''}
                 `;
@@ -415,6 +420,15 @@ async function onCalculate() {
 
 window.updateChgTime = function(lat, lng, mins) {
     userCustomDurations[`${lat.toFixed(4)},${lng.toFixed(4)}`] = parseInt(mins);
+    onCalculate();
+}
+
+// ★ 削除ボタンの処理：無視リストに入れて再計算
+window.removeChg = function(lat, lng) {
+    userIgnoredChargers.push(`${lat.toFixed(4)},${lng.toFixed(4)}`);
+    // もし手動で追加したスポットや経由地ならそれも解除する
+    userForcedChargers = userForcedChargers.filter(c => !(Math.abs(c.lat - lat) < 0.001 && Math.abs(c.lng - lng) < 0.001));
+    userWaypoints = userWaypoints.filter(w => !(Math.abs(w.lat - lat) < 0.001 && Math.abs(w.lng - lng) < 0.001));
     onCalculate();
 }
 
@@ -510,15 +524,27 @@ function updateMapDrawing() {
     googleMap.fitBounds(bounds);
 }
 
-function showAlts(idx) {
+// ★ 代替SAの距離で「手前」か「奥」かを判定する処理を追加
+window.showAlts = function(idx) {
     const el = document.getElementById(`alt-list-${idx}`);
     el.style.display = el.style.display === 'flex' ? 'none' : 'flex';
     if (el.innerHTML) return;
     
     const curStop = currentSim.stops[idx];
     
+    // 目的地までの距離を基準にして、手前か奥かを判定する
+    const destPoint = currentDetailedPath[currentDetailedPath.length - 1];
+    const destLat = destPoint.lat();
+    const destLng = destPoint.lng();
+    const curDistToDest = haversine(curStop.charger.lat, curStop.charger.lng, destLat, destLng);
+    
     const alts = chargerDB
-        .map(c => ({ ...c, dist: haversine(c.lat, c.lng, curStop.charger.lat, curStop.charger.lng) }))
+        .map(c => {
+            const distToCur = haversine(c.lat, c.lng, curStop.charger.lat, curStop.charger.lng);
+            const distToDest = haversine(c.lat, c.lng, destLat, destLng);
+            const direction = distToDest < curDistToDest ? '奥（先）' : '手前'; 
+            return { ...c, dist: distToCur, direction };
+        })
         .filter(c => c.dist > 0.1 && c.dist < 60 && c.type === 'sa_pa')
         .sort((a, b) => a.dist - b.dist)
         .slice(0, 5);
@@ -526,16 +552,19 @@ function showAlts(idx) {
     el.innerHTML = alts.map(a => `
         <div class="alt-opt" onclick="forceChg(${a.lat}, ${a.lng}, ${idx})" style="display:flex; justify-content:space-between; align-items:center;">
             <span>${a.name} <span style="font-size:10px; color:var(--muted)">(${a.powerKw}kW)</span></span>
-            <span style="background:rgba(6,182,212,0.15); color:var(--accent2); padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold;">約 ${a.dist.toFixed(1)}km</span>
+            <span style="background:rgba(6,182,212,0.15); color:var(--accent2); padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold;">${a.direction}に ${a.dist.toFixed(1)}km</span>
         </div>
     `).join('');
 }
 
-async function forceChg(lat, lng, idx) {
+// ★ 手動で変更した場合、古いスポットは無視リストに入れる
+window.forceChg = async function(lat, lng, idx) {
     const found = chargerDB.find(c => c.lat === lat && c.lng === lng);
+    const oldChg = currentSim.stops[idx].charger;
+    userIgnoredChargers.push(`${oldChg.lat.toFixed(4)},${oldChg.lng.toFixed(4)}`);
     found.targetIdx = currentSim.stops[idx].charger.targetIdx || 0;
     userForcedChargers.push(found);
-    await onCalculate();
+    onCalculate();
 }
 
 function drawMarkers(originPoint, destPoint, stops, deadPoint, warningPoint) {
@@ -546,8 +575,8 @@ function drawMarkers(originPoint, destPoint, stops, deadPoint, warningPoint) {
     if (!currentSim.isDead) {
         mapMarkers.push(new google.maps.Marker({ position: destPoint, map: googleMap, label: { text: "G", color: "white" } }));
     } else {
-        if(deadPoint) mapMarkers.push(new google.maps.Marker({ position: deadPoint, map: googleMap, label: { text: "☠️", fontSize: "20px" }, title: "電欠地点" }));
-        if(warningPoint) mapMarkers.push(new google.maps.Marker({ position: warningPoint, map: googleMap, label: { text: "⚠️", fontSize: "16px" }, title: "SOC 10%地点" }));
+        if(deadPoint) mapMarkers.push(new google.maps.Marker({ position: deadPoint, map: googleMap, label: { text: "☠️", fontSize: "20px" }, title: "電欠地点", zIndex: 9999 }));
+        if(warningPoint) mapMarkers.push(new google.maps.Marker({ position: warningPoint, map: googleMap, label: { text: "⚠️", fontSize: "16px" }, title: "SOC 20%地点" }));
     }
 
     const chargerSvg = "M7 2v11h3v9l7-12h-4l4-8z"; 
