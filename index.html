@@ -76,7 +76,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
     </div>
     <div class="section" style="padding-top:10px;">
         <div class="field"><input type="password" id="api-key" placeholder="API KEY" style="font-family:monospace; font-size:12px;"></div>
-        <div class="field"><label>出発地</label><input type="text" id="origin" value="青森"></div>
+        <div class="field"><label>出発地</label><input type="text" id="origin" value="東京"></div>
         <div class="field"><label>目的地</label><input type="text" id="dest" value="大阪城"></div>
         <div class="stat-grid">
             <div class="field"><label>出発SOC (%)</label><input type="number" id="start-soc" value="100"></div>
@@ -121,7 +121,7 @@ let routePolylines = [], comboChart = null, mapMarkers = [], emergencyMarkers = 
 let userForcedChargers = []; 
 let userWaypoints = []; 
 let userCustomDurations = {}; 
-let userIgnoredChargers = []; // ★ 新規追加：意図的に削除した充電器のリスト
+let userIgnoredChargers = []; 
 
 Chart.defaults.color = '#94a3b8';
 Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
@@ -154,7 +154,7 @@ function initApp() {
         userForcedChargers = []; 
         userWaypoints = [];
         userCustomDurations = {}; 
-        userIgnoredChargers = []; // 最初の計算時は無視リストもリセット
+        userIgnoredChargers = []; 
         onCalculate(); 
     });
     
@@ -196,6 +196,66 @@ function haversine(l1, g1, l2, g2) {
     return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
+// ★ bZ4XのSOCごとの受入能力(kW)を計算する関数
+function getVehicleAcceptanceKw(soc) {
+    const curve = [
+        [0, 115], [10, 115], [20, 135], [30, 140], [40, 135],
+        [50, 125], [60, 110], [70, 90], [80, 75], [90, 55], [100, 45]
+    ];
+    if (soc <= 0) return curve[0][1];
+    if (soc >= 100) return curve[curve.length - 1][1];
+    
+    for (let i = 0; i < curve.length - 1; i++) {
+        if (soc >= curve[i][0] && soc < curve[i+1][0]) {
+            const socRange = curve[i+1][0] - curve[i][0];
+            const kwRange = curve[i+1][1] - curve[i][1];
+            const progress = (soc - curve[i][0]) / socRange;
+            return curve[i][1] + kwRange * progress;
+        }
+    }
+    return 45;
+}
+
+// ★ 1分単位の厳密な充電シミュレーション（熱ダレ考慮）
+function calculateCharging(startSoc, durationMins, chargerName, powerKwStr) {
+    const batteryKwh = 71.4;
+    let currentSoc = startSoc;
+    let maxKw = parseInt(powerKwStr) || 50;
+    let isFlash = chargerName.toUpperCase().includes('FLASH');
+    let maxDemanded = 0;
+
+    for (let t = 1; t <= durationMins; t++) {
+        if (currentSoc >= 100) {
+            currentSoc = 100;
+            break;
+        }
+        
+        // その時点での車側の受入限界
+        let vehicleMax = getVehicleAcceptanceKw(currentSoc);
+        maxDemanded = Math.max(maxDemanded, vehicleMax);
+
+        let chargerMax = maxKw;
+        
+        // FLASH（水冷）以外で、90kW超えの充電器の熱ダレルールを適用
+        if (!isFlash && maxKw > 90) {
+            if (t <= 15) {
+                chargerMax = maxKw;
+            } else if (t <= 25) {
+                // 最初の15分で130kWを超えていたら熱ダレで90kWに落ちる。超えてなければ130kW維持。
+                chargerMax = maxDemanded > 130 ? 90 : 130;
+            } else {
+                chargerMax = 90;
+            }
+        }
+
+        // 実際に入力される電力は「車」と「充電器」の低い方
+        let actualKw = Math.min(vehicleMax, chargerMax);
+        let socAdded = (actualKw / 60) / batteryKwh * 100;
+        currentSoc += socAdded;
+    }
+    return Math.min(100, currentSoc);
+}
+
 async function findNearbyPOIs(lat, lng) {
   const types = ['convenience_store', 'restaurant'];
   const labels = { convenience_store:'コンビニ', restaurant:'飲食店' };
@@ -218,7 +278,6 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
 
     for (let i = 0; i < segments.length; i++) {
         const s = segments[i];
-        
         const progress = i / segments.length;
         const elevIdx = Math.floor(progress * elevations.length);
         const currentElev = elevations[elevIdx] || 0;
@@ -229,7 +288,6 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
         const energy = (s.distKm / baseEff) + elevEnergy;
         const currentSoc = (socKwh / batteryKwh) * 100;
 
-        // ★ 閾値を10%から20%に変更
         if (currentSoc <= 20 && !warningLocation) {
             warningLocation = { lat: s.lat, lng: s.lng };
             warningKm = km;
@@ -249,7 +307,8 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
             const duration = userCustomDurations[chgKey] || 30; 
 
             const chg = { km, charger: {name: `🆘 ${wpName}`, lat: s.lat, lng: s.lng, powerKw: '50'}, socBefore: currentSoc, time, duration };
-            chg.socAfter = Math.min(85, currentSoc + (45 * (duration/30))); 
+            // ★ 新しい充電シミュレータを使用
+            chg.socAfter = calculateCharging(currentSoc, duration, chg.charger.name, chg.charger.powerKw);
             stops.push(chg);
             
             profile.push({ km, time, soc: currentSoc, speed: 0, elev: currentElev });
@@ -268,7 +327,8 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
             const duration = userCustomDurations[chgKey] || 30; 
 
             const chg = { km, charger: pending, socBefore: currentSoc, time, duration };
-            chg.socAfter = Math.min(85, currentSoc + (45 * (duration/30))); 
+            // ★ 新しい充電シミュレータを使用
+            chg.socAfter = calculateCharging(currentSoc, duration, pending.name, pending.powerKw);
             stops.push(chg);
             
             profile.push({ km, time, soc: currentSoc, speed: 0, elev: currentElev });
@@ -279,7 +339,6 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
             lastChargeKm = km; pending = null;
         }
 
-        // 自動サーチ（除外リストにあるスポットは無視する）
         if (!pending && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 50) {
             const found = chargerDB.find(c => {
                 const chgKey = `${c.lat.toFixed(4)},${c.lng.toFixed(4)}`;
@@ -349,7 +408,6 @@ async function onCalculate() {
             if (currentSim.isDead) {
                 const alertEl = document.getElementById('dead-alert');
                 alertEl.style.display = 'block';
-                // ★ 文言も20%に変更
                 alertEl.innerHTML = `
                     ⚠️ <b>${currentSim.deadKm.toFixed(0)}km地点で電欠しました！</b><br>
                     <div style="margin-top:10px; font-size:12px; color:var(--text);">電欠する少し前（SOC20%・${currentSim.warningKm.toFixed(0)}km地点付近）で下道に降りて探します。</div>
@@ -379,7 +437,6 @@ async function onCalculate() {
                 const div = document.createElement('div'); div.className = 'stop-item';
                 if(isEmergency) div.style.borderColor = '#ef4444';
                 
-                // ★ 削除（除外）ボタンを追加
                 div.innerHTML = `
                     <div style="font-weight:700; color:var(--text); font-size:1.1rem; margin-bottom:6px;">${st.charger.name}</div>
                     
@@ -423,10 +480,8 @@ window.updateChgTime = function(lat, lng, mins) {
     onCalculate();
 }
 
-// ★ 削除ボタンの処理：無視リストに入れて再計算
 window.removeChg = function(lat, lng) {
     userIgnoredChargers.push(`${lat.toFixed(4)},${lng.toFixed(4)}`);
-    // もし手動で追加したスポットや経由地ならそれも解除する
     userForcedChargers = userForcedChargers.filter(c => !(Math.abs(c.lat - lat) < 0.001 && Math.abs(c.lng - lng) < 0.001));
     userWaypoints = userWaypoints.filter(w => !(Math.abs(w.lat - lat) < 0.001 && Math.abs(w.lng - lng) < 0.001));
     onCalculate();
@@ -524,15 +579,12 @@ function updateMapDrawing() {
     googleMap.fitBounds(bounds);
 }
 
-// ★ 代替SAの距離で「手前」か「奥」かを判定する処理を追加
 window.showAlts = function(idx) {
     const el = document.getElementById(`alt-list-${idx}`);
     el.style.display = el.style.display === 'flex' ? 'none' : 'flex';
     if (el.innerHTML) return;
     
     const curStop = currentSim.stops[idx];
-    
-    // 目的地までの距離を基準にして、手前か奥かを判定する
     const destPoint = currentDetailedPath[currentDetailedPath.length - 1];
     const destLat = destPoint.lat();
     const destLng = destPoint.lng();
@@ -557,7 +609,6 @@ window.showAlts = function(idx) {
     `).join('');
 }
 
-// ★ 手動で変更した場合、古いスポットは無視リストに入れる
 window.forceChg = async function(lat, lng, idx) {
     const found = chargerDB.find(c => c.lat === lat && c.lng === lng);
     const oldChg = currentSim.stops[idx].charger;
