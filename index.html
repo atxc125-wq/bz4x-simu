@@ -166,7 +166,7 @@ function initApp() {
     placesService = new google.maps.places.PlacesService(googleMap);
     
     new google.maps.places.Autocomplete(document.getElementById('origin'));
-    new google.maps.places.Autocomplete(document.getElementById('waypoint')); // ★ 復活
+    new google.maps.places.Autocomplete(document.getElementById('waypoint'));
     new google.maps.places.Autocomplete(document.getElementById('dest'));
     
     document.getElementById('calc-btn').addEventListener('click', () => { 
@@ -274,8 +274,9 @@ async function findNearbyPOIs(lat, lng) {
   return results;
 }
 
-async function runSimulation(segments, elevations, params, waypointIndexes, isUpboundLegs) {
-    const { batteryKwh, startSocPct, thresholdSocPct, tripDate, startHour } = params;
+// ★ 引数を1つのparamsオブジェクトに集約（エラー防止）
+async function runSimulation(segments, elevations, params) {
+    const { batteryKwh, startSocPct, thresholdSocPct, tripDate, startHour, waypointIndexes, isUpboundLegs, allChargerWps } = params;
     let socKwh = (startSocPct / 100) * batteryKwh, km = 0, time = 0;
     const profile = [], stops = [];
     let lastChargeKm = -999, lastWeatherKm = -999, curBaseTemp = 15, lastWeatherElev = 0;
@@ -291,7 +292,31 @@ async function runSimulation(segments, elevations, params, waypointIndexes, isUp
         const currentElev = elevations[Math.min(elevations.length-1, Math.floor(progress * elevations.length))] || 0;
         
         // 経由地を通過したらレグを進める（これで往復時の上り下りが動的に切り替わります）
-        if (waypointIndexes.includes(i)) currentLegIdx++;
+        if (waypointIndexes.includes(i)) {
+            currentLegIdx++;
+            
+            // 経由地に追加された充電器とのGPSマッチング
+            const hit = allChargerWps.find(c => haversine(c.lat, c.lng, s.lat, s.lng) < 0.5);
+            if (hit && (km - lastChargeKm) > 5) {
+                const chgKey = hit.key || `${hit.lat.toFixed(4)},${hit.lng.toFixed(4)}`;
+                const duration = userCustomDurations[chgKey] || 30; 
+                const socBefore = (socKwh / batteryKwh) * 100;
+                
+                const chargerInfo = { name: (hit.isSOS ? `🆘 ` : '') + hit.name, lat: hit.lat, lng: hit.lng, powerKw: hit.powerKw };
+                const socAfter = calculateCharging(socBefore, duration, chargerInfo);
+                
+                for(let t=1; t<=duration; t++) {
+                    const tempSoc = calculateCharging(socBefore, t, chargerInfo);
+                    if(t%5===0 || t===duration) profile.push({ km, time: time + t, soc: tempSoc, speed: 0, elev: currentElev });
+                }
+                
+                stops.push({ charger: chargerInfo, socBefore, socAfter, duration, time, isUpbound: isUpboundLegs[currentLegIdx-1] });
+                time += duration;
+                socKwh = (socAfter / 100) * batteryKwh;
+                lastChargeKm = km;
+            }
+        }
+        
         const currentTripIsUpbound = isUpboundLegs[currentLegIdx] || false;
 
         if (km - lastWeatherKm >= 50) {
@@ -325,51 +350,8 @@ async function runSimulation(segments, elevations, params, waypointIndexes, isUp
             break; 
         }
 
-        const processCharge = (chargerInfo, duration) => {
-            const chg = { km, charger: chargerInfo, socBefore: currentSoc, time, duration };
-            const isFlash = chargerInfo.name.toUpperCase().includes('FLASH') || chargerInfo.name.includes('フラッシュ') || parseInt(chargerInfo.powerKw) >= 200;
-            const maxKw = parseInt(chargerInfo.powerKw) || 50;
-            let maxDemanded = 0;
-
-            for (let t = 1; t <= duration; t++) {
-                if (currentSoc >= 100) { currentSoc = 100; break; }
-                let vehicleMax = getVehicleAcceptanceKw(currentSoc);
-                maxDemanded = Math.max(maxDemanded, vehicleMax);
-                let chargerMax = maxKw;
-                
-                if (!isFlash && maxKw > 90) {
-                    if (t <= 15) chargerMax = maxKw;
-                    else if (t <= 25) chargerMax = maxDemanded > 130 ? 90 : 130;
-                    else chargerMax = 90;
-                }
-
-                let actualKw = Math.min(vehicleMax, chargerMax);
-                currentSoc += (actualKw / 60) / batteryKwh * 100;
-                time++;
-                
-                if (t % 5 === 0 || t === duration) {
-                    profile.push({ km, time, soc: currentSoc, speed: 0, elev: currentElev });
-                }
-            }
-            chg.socAfter = currentSoc;
-            stops.push(chg);
-            socKwh = (currentSoc / 100) * batteryKwh;
-            lastChargeKm = km;
-        };
-
-        // 自動追加、もしくは手動追加した充電器に到達したか判定
-        const reachedAuto = autoChargers.find(ac => haversine(ac.lat, ac.lng, s.lat, s.lng) < 0.2);
-        const reachedManual = userWaypoints.find(uw => haversine(uw.lat, uw.lng, s.lat, s.lng) < 0.2);
-        const hit = reachedAuto || reachedManual;
-
-        if (hit && (km - lastChargeKm) > 5) {
-            const chgKey = hit.key || `${hit.lat.toFixed(4)},${hit.lng.toFixed(4)}`;
-            const duration = userCustomDurations[chgKey] || 30; 
-            processCharge({name: (hit.isSOS ? `🆘 ` : '') + hit.name, lat: hit.lat, lng: hit.lng, powerKw: hit.powerKw}, duration);
-        }
-
-        // 自動サーチ
-        if (!hit && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 50) {
+        // 自動サーチ：感知半径0.5km(FLASHは7.0km)で検索し、未知の充電器ならリルートを要求
+        if (currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 50) {
             const found = chargerDB.find(c => {
                 const dist = haversine(c.lat, c.lng, s.lat, s.lng);
                 const isFlash = c.name.toUpperCase().includes('FLASH') || c.name.includes('フラッシュ') || parseInt(c.powerKw) >= 200;
@@ -380,7 +362,7 @@ async function runSimulation(segments, elevations, params, waypointIndexes, isUp
 
             if (found) {
                 const key = `${found.lat.toFixed(4)},${found.lng.toFixed(4)}`;
-                if (!autoChargers.some(ac => ac.key === key)) {
+                if (!allChargerWps.some(ac => (ac.key || `${ac.lat.toFixed(4)},${ac.lng.toFixed(4)}`) === key)) {
                     autoChargers.push({ ...found, key });
                     return { requestReroute: true };
                 }
@@ -398,12 +380,12 @@ async function runSimulation(segments, elevations, params, waypointIndexes, isUp
 }
 
 async function onCalculate() {
+    if(chargerDB.length === 0) return alert('充電器データがロードされていません！');
     showLoading('ルート最適化中...');
     const origin = document.getElementById('origin').value;
-    const waypointVal = document.getElementById('waypoint').value; // ★ 無事復活！
+    const waypointVal = document.getElementById('waypoint').value; 
     const dest = document.getElementById('dest').value;
 
-    // テキスト経由地と、システムが見つけた充電経由地を合成
     const combinedWps = [...userWaypoints, ...autoChargers].map(w => ({
         location: new google.maps.LatLng(w.lat, w.lng), stopover: true
     }));
@@ -414,7 +396,7 @@ async function onCalculate() {
     directionsService.route({ origin, destination: dest, waypoints: combinedWps, optimizeWaypoints: true, travelMode: 'DRIVING' }, async (res, status) => {
         if (status !== 'OK') return hideLoading() || alert('ルート解析失敗');
 
-        // ★ 各Leg（区間）ごとの上り・下りを判定して配列にする（往復ルートに完璧に対応！）
+        // ★ 各Legごとの上り・下りを判定
         const isUpboundLegs = res.routes[0].legs.map(leg => {
             const startToTokyo = haversine(leg.start_location.lat(), leg.start_location.lng(), 35.68, 139.76);
             const endToTokyo = haversine(leg.end_location.lat(), leg.end_location.lng(), 35.68, 139.76);
@@ -437,15 +419,22 @@ async function onCalculate() {
             if (legIdx < res.routes[0].legs.length - 1) waypointIndexes.push(segments.length - 1);
         });
 
-        elevationService.getElevationAlongPath({ path: res.routes[0].overview_path, samples: 250 }, async (elevRes) => {
-            const elevations = elevRes ? elevRes.map(r => r.elevation) : new Array(250).fill(0);
+        elevationService.getElevationAlongPath({ path: res.routes[0].overview_path, samples: 250 }, async (elevRes, status) => {
+            const elevations = (status === 'OK' && elevRes) ? elevRes.map(r => r.elevation) : new Array(250).fill(0);
             
-            const result = await runSimulation(segments, elevations, {
-                batteryKwh: 71.4, startSocPct: parseFloat(document.getElementById('start-soc').value),
+            // ★ 引数を1つのparamsオブジェクトにまとめる
+            const params = {
+                batteryKwh: 71.4, 
+                startSocPct: parseFloat(document.getElementById('start-soc').value),
                 thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value),
                 tripDate: document.getElementById('trip-date').value, 
-                startHour: parseInt(document.getElementById('start-time').value.split(':')[0]) + (parseInt(document.getElementById('start-time').value.split(':')[1]) / 60)
-            }, waypointIndexes, isUpboundLegs);
+                startHour: parseInt(document.getElementById('start-time').value.split(':')[0]) + (parseInt(document.getElementById('start-time').value.split(':')[1]) / 60),
+                waypointIndexes, 
+                isUpboundLegs,
+                allChargerWps: [...userWaypoints, ...autoChargers]
+            };
+
+            const result = await runSimulation(segments, elevations, params);
 
             if (result.requestReroute) return onCalculate();
 
@@ -496,14 +485,14 @@ function renderUI() {
             <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">到着 ${st.socBefore.toFixed(0)}% ➔ 出発 ${st.socAfter.toFixed(0)}%</div>
             
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                <select onchange="updateChgTime('${st.charger.key || st.charger.lat+','+st.charger.lng}', this.value)" style="width:auto; padding:5px; font-size:11px;">
+                <select onchange="updateChgTime('${st.charger.lat.toFixed(4)},${st.charger.lng.toFixed(4)}', this.value)" style="width:auto; padding:5px; font-size:11px;">
                     <option value="15" ${st.duration==15?'selected':''}>⏱ 15分</option>
                     <option value="30" ${st.duration==30?'selected':''}>⏱ 30分</option>
                     <option value="45" ${st.duration==45?'selected':''}>⏱ 45分</option>
                     <option value="60" ${st.duration==60?'selected':''}>⏱ 60分</option>
                 </select>
                 ${!isEmergency ? `<button class="alt-charger-btn" onclick="showAlts(${idx})">⟳ SA変更</button>` : ''}
-                <button class="alt-charger-btn" style="background:rgba(239, 68, 68, 0.2); color:#ef4444; border: 1px solid #ef4444;" onclick="removeChg('${st.charger.key || st.charger.lat+','+st.charger.lng}')">✖ 削除</button>
+                <button class="alt-charger-btn" style="background:rgba(239, 68, 68, 0.2); color:#ef4444; border: 1px solid #ef4444;" onclick="removeChg('${st.charger.lat.toFixed(4)},${st.charger.lng.toFixed(4)}')">✖ 削除</button>
             </div>
             ${!isEmergency ? `<div class="alt-list" id="alt-list-${idx}"></div>` : ''}
         `;
@@ -518,8 +507,8 @@ function renderUI() {
 window.updateChgTime = (key, mins) => { userCustomDurations[key] = parseInt(mins); onCalculate(); };
 window.removeChg = (key) => { 
     userIgnoredChargers.push(key); 
-    autoChargers = autoChargers.filter(ac => ac.key !== key);
-    userWaypoints = userWaypoints.filter(uw => (uw.key || uw.lat+','+uw.lng) !== key);
+    autoChargers = autoChargers.filter(ac => (ac.key || `${ac.lat.toFixed(4)},${ac.lng.toFixed(4)}`) !== key);
+    userWaypoints = userWaypoints.filter(uw => (uw.key || `${uw.lat.toFixed(4)},${uw.lng.toFixed(4)}`) !== key);
     onCalculate(); 
 };
 window.setAxis = (a) => { currentAxis = a; document.getElementById('btn-time').classList.toggle('active', a==='time'); document.getElementById('btn-dist').classList.toggle('active', a==='dist'); drawComboChart(); };
@@ -599,7 +588,7 @@ window.showAlts = function(idx) {
         const distToCur = haversine(c.lat, c.lng, curStop.charger.lat, curStop.charger.lng);
         const direction = haversine(c.lat, c.lng, destLat, destLng) < curDistToDest ? '奥（先）' : '手前'; 
         return { ...c, dist: distToCur, direction };
-    }).filter(c => c.dist > 0.1 && c.dist < 60 && c.type === 'sa_pa').sort((a, b) => a.dist - b.dist).slice(0, 5);
+    }).filter(c => c.dist > 0.1 && c.dist < 60 && c.type === 'sa_pa' && isValidDirection(c.name, curStop.isUpbound)).sort((a, b) => a.dist - b.dist).slice(0, 5);
     
     el.innerHTML = alts.map(a => `
         <div class="alt-opt" onclick="forceChg(${a.lat}, ${a.lng}, ${idx})" style="display:flex; justify-content:space-between; align-items:center;">
@@ -630,9 +619,11 @@ function drawMarkers(originPoint, destPoint, stops, deadPoint, warningPoint) {
         if(warningPoint) addMarker(warningPoint, '⚠️', null, 9998, 'SOC 20%地点');
     }
     stops.forEach(st => {
+        const isEmergency = st.charger.name.includes("🆘");
         mapMarkers.push(new google.maps.Marker({
-            position: {lat: st.charger.lat, lng: st.charger.lng}, map: googleMap, title: st.charger.name,
-            icon: {path: "M7 2v11h3v9l7-12h-4l4-8z", fillColor: st.charger.name.includes("🆘") ? "#ef4444" : "#10b981", fillOpacity: 1, scale: 1.2, strokeColor: "white", strokeWeight: 1}
+            position: { lat: st.charger.lat, lng: st.charger.lng },
+            map: googleMap, title: st.charger.name,
+            icon: { path: "M7 2v11h3v9l7-12h-4l4-8z", fillColor: isEmergency ? "#ef4444" : "#10b981", fillOpacity: 1, strokeWeight: 1, strokeColor: "#ffffff", scale: 1.5, anchor: new google.maps.Point(10, 10) }
         }));
     });
 }
