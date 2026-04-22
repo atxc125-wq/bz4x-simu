@@ -14,10 +14,22 @@
   --text: #f1f5f9; --muted: #94a3b8;
   --radius: 12px;
 }
-body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; min-height: 100vh; }
+body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; margin: 0; }
+
+/* PC向けのレイアウト */
 #app { display: flex; height: 100vh; overflow: hidden; }
-#left { width: 360px; min-width: 300px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; box-shadow: 4px 0 15px rgba(0,0,0,0.3); z-index: 10; }
+#left { width: 360px; min-width: 320px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; box-shadow: 4px 0 15px rgba(0,0,0,0.3); z-index: 10; }
 #right { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+
+/* スマホ向けの縦スクロールレイアウト */
+@media (max-width: 860px) {
+  #app { flex-direction: column; height: auto; overflow: visible; }
+  #left { width: 100%; border-right: none; border-bottom: 1px solid var(--border); overflow-y: visible; box-shadow: none; }
+  #right { flex: none; height: auto; display: flex; flex-direction: column; }
+  #map { height: 50vh !important; min-height: 400px; }
+  .chart-wrap { height: 350px !important; flex: none !important; }
+}
+
 .section { padding: 20px; border-bottom: 1px solid var(--border); }
 .field { margin-bottom: 12px; }
 label { display: block; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; font-weight: 600; }
@@ -28,10 +40,17 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
 .stat { background: #0f172a; border-radius: 8px; padding: 12px; text-align: center; border: 1px solid var(--border); }
 .stat .val { font-size: 1.5rem; font-weight: 700; color: var(--accent2); }
-.stop-item { background: #0f172a; border-radius: 8px; padding: 14px; margin-bottom: 10px; border-left: 4px solid #10b981; border: 1px solid var(--border); }
-.poi-tag { display: inline-block; background: rgba(59, 130, 246, 0.15); color: #93c5fd; font-size: 10px; padding: 3px 8px; border-radius: 12px; margin-right: 6px; margin-top: 8px; border: 1px solid rgba(59, 130, 246, 0.3); }
 
-.alt-charger-btn { background: #1e293b; border: 1px solid var(--border); color: var(--accent2); border-radius: 4px; padding: 6px 10px; font-size: 0.75rem; cursor: pointer; transition: 0.2s; }
+/* 充電スポットカード */
+.stop-item { background: #0f172a; border-radius: 8px; padding: 16px; margin-bottom: 12px; border-left: 4px solid #10b981; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.chg-specs { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.chg-chip { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+.chip-kw { background: rgba(6, 182, 212, 0.15); color: var(--accent2); border: 1px solid rgba(6, 182, 212, 0.3); }
+.chip-auth { background: rgba(59, 130, 246, 0.15); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.3); }
+
+.poi-tag { display: inline-block; background: rgba(148, 163, 184, 0.1); color: #cbd5e1; font-size: 10px; padding: 3px 8px; border-radius: 12px; margin-right: 6px; margin-top: 8px; }
+
+.alt-charger-btn { background: #1e293b; border: 1px solid var(--border); color: var(--accent2); border-radius: 4px; padding: 6px 10px; font-size: 0.75rem; cursor: pointer; transition: 0.2s; white-space: nowrap; }
 .alt-charger-btn:hover { background: #334155; }
 .alt-list { display: none; margin-top: 6px; flex-direction: column; gap: 4px; }
 .alt-opt { background: #0b1120; border: 1px solid var(--border); color: #f1f5f9; padding: 8px; font-size: 0.75rem; text-align: left; cursor: pointer; border-radius: 4px; transition: 0.2s; }
@@ -71,7 +90,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
             <label>マップ表示モード</label>
             <select id="color-mode">
                 <option value="soc">SOC残量 (赤20% / 黄50% / 青100%)</option>
-                <option value="speed">走行速度 (高速/低速)</option>
+                <option value="speed">走行速度 (渋滞=赤 / 順調=青)</option>
             </select>
         </div>
         <button id="calc-btn" style="margin-top:8px;">シミュレーション開始</button>
@@ -105,7 +124,7 @@ let currentSim = null, currentDetailedPath = null;
 let routePolylines = [], comboChart = null, mapMarkers = [], emergencyMarkers = [];
 let userForcedChargers = []; 
 let userWaypoints = []; 
-let userCustomDurations = {}; // ★ ユーザーが選んだ充電時間（分）を保存するオブジェクト
+let userCustomDurations = {}; 
 
 Chart.defaults.color = '#94a3b8';
 Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
@@ -137,7 +156,7 @@ function initApp() {
     document.getElementById('calc-btn').addEventListener('click', () => { 
         userForcedChargers = []; 
         userWaypoints = [];
-        userCustomDurations = {}; // リセット
+        userCustomDurations = {}; 
         onCalculate(); 
     });
     
@@ -146,28 +165,35 @@ function initApp() {
     });
 }
 
-// ★ 20%で赤、50%で黄色、100%で青（シアン）になる精密なカラー補間
+// ★ SOCと速度の両方で共通のグラデーションロジックを使用
 function getRouteColor(val, mode) {
-    if (mode === 'soc') {
-        if (val <= 20) return '#ef4444'; // 完全な赤
-        if (val <= 50) {
-            // 20~50: 赤(239,68,68) から 黄色(234,179,8)
-            const ratio = (val - 20) / 30;
-            const r = Math.round(239 - (239 - 234) * ratio);
-            const g = Math.round(68 + (179 - 68) * ratio);
-            const b = Math.round(68 - (68 - 8) * ratio);
-            return `rgb(${r}, ${g}, ${b})`;
-        } else {
-            // 50~100: 黄色(234,179,8) から 青シアン(6,182,212)
-            const ratio = (val - 50) / 50;
-            const r = Math.round(234 - (234 - 6) * ratio);
-            const g = Math.round(179 + (182 - 179) * ratio);
-            const b = Math.round(8 + (212 - 8) * ratio);
-            return `rgb(${r}, ${g}, ${b})`;
-        }
+    // 速度モードの場合、0km(赤) 〜 100km(青) にマッピング
+    const pct = mode === 'speed' ? Math.max(0, Math.min(100, val)) : val;
+
+    if (pct <= 20) return '#ef4444'; 
+    if (pct <= 50) {
+        const ratio = (pct - 20) / 30;
+        const r = Math.round(239 - (239 - 234) * ratio);
+        const g = Math.round(68 + (179 - 68) * ratio);
+        const b = Math.round(68 - (68 - 8) * ratio);
+        return `rgb(${r}, ${g}, ${b})`;
     } else {
-        return val > 80 ? '#fb923c' : '#38bdf8';
+        const ratio = (pct - 50) / 50;
+        const r = Math.round(234 - (234 - 6) * ratio);
+        const g = Math.round(179 + (182 - 179) * ratio);
+        const b = Math.round(8 + (212 - 8) * ratio);
+        return `rgb(${r}, ${g}, ${b})`;
     }
+}
+
+// 簡易的な認証方式の推定ロジック
+function getAuthNetwork(name) {
+    const n = name.toUpperCase();
+    if (n.includes('TESLA') || n.includes('テスラ')) return 'Tesla';
+    if (n.includes('TERA') || n.includes('テラチャージ')) return 'TeraCharge';
+    if (n.includes('FLASH')) return 'FLASH';
+    if (n.includes('TEEMO')) return 'TEEMO';
+    return 'eMP';
 }
 
 function haversine(l1, g1, l2, g2) {
@@ -194,8 +220,7 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
     let socKwh = (startSocPct / 100) * batteryKwh, km = 0, time = 0;
     const profile = [], stops = [], fcs = [...forced];
     let pending = null, lastChargeKm = -999;
-    let isDead = false, deadLocation = null;
-    let warningLocation = null, warningKm = 0; // ★ SOC 10%の警告地点
+    let isDead = false, deadLocation = null, warningLocation = null, warningKm = 0;
 
     for (let i = 0; i < segments.length; i++) {
         const s = segments[i];
@@ -210,7 +235,6 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
         const energy = (s.distKm / baseEff) + elevEnergy;
         const currentSoc = (socKwh / batteryKwh) * 100;
 
-        // ★ 10%を下回った瞬間の場所を記録
         if (currentSoc <= 10 && !warningLocation) {
             warningLocation = { lat: s.lat, lng: s.lng };
             warningKm = km;
@@ -227,9 +251,9 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
             const wpIndex = waypointIndexes.indexOf(i);
             const wpName = userWaypoints[wpIndex] ? userWaypoints[wpIndex].name : "下道EV充電スタンド";
             const chgKey = `${s.lat.toFixed(4)},${s.lng.toFixed(4)}`;
-            const duration = userCustomDurations[chgKey] || 30; // ★ 選択時間を適用
+            const duration = userCustomDurations[chgKey] || 30; 
 
-            const chg = { km, charger: {name: `🆘 ${wpName}`, lat: s.lat, lng: s.lng}, socBefore: currentSoc, time, duration };
+            const chg = { km, charger: {name: `🆘 ${wpName}`, lat: s.lat, lng: s.lng, powerKw: '50'}, socBefore: currentSoc, time, duration };
             chg.socAfter = Math.min(85, currentSoc + (45 * (duration/30))); 
             stops.push(chg);
             
@@ -246,7 +270,7 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
 
         if (pending && i >= pending.targetIdx) {
             const chgKey = `${pending.lat.toFixed(4)},${pending.lng.toFixed(4)}`;
-            const duration = userCustomDurations[chgKey] || 30; // ★ 選択時間を適用
+            const duration = userCustomDurations[chgKey] || 30; 
 
             const chg = { km, charger: pending, socBefore: currentSoc, time, duration };
             chg.socAfter = Math.min(85, currentSoc + (45 * (duration/30))); 
@@ -270,9 +294,7 @@ async function runSimulation(segments, elevations, params, forced = [], waypoint
         profile.push({ km, time, soc: (socKwh / batteryKwh) * 100, speed: s.speed, elev: currentElev });
     }
     
-    // 電欠時に10%地点が記録されていなければ電欠地点を採用
     warningLocation = warningLocation || deadLocation;
-    
     return { profile, stops, arrivalSoc: isDead ? 0 : (socKwh / batteryKwh) * 100, eta: time, isDead, deadKm: km, deadLocation, warningLocation, warningKm };
 }
 
@@ -325,7 +347,6 @@ async function onCalculate() {
                 thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value)
             }, userForcedChargers, waypointIndexes);
 
-            // ★ SOC10%の警告地点から検索するように変更
             if (currentSim.isDead) {
                 const alertEl = document.getElementById('dead-alert');
                 alertEl.style.display = 'block';
@@ -352,22 +373,32 @@ async function onCalculate() {
                 const isEmergency = st.charger.name.includes("🆘");
                 const pois = isEmergency ? [] : await findNearbyPOIs(st.charger.lat, st.charger.lng);
                 
+                // ★ kWと認証方式の判定
+                const kw = st.charger.powerKw ? `${st.charger.powerKw}kW` : '出力不明';
+                const authNetwork = isEmergency ? '各種アプリ/クレカ' : getAuthNetwork(st.charger.name);
+
                 const div = document.createElement('div'); div.className = 'stop-item';
                 if(isEmergency) div.style.borderColor = '#ef4444';
                 
-                // ★ 充電時間のプルダウンUIを追加
                 div.innerHTML = `
-                    <div style="font-weight:700; color:var(--text); font-size:1.1rem; margin-bottom:4px;">${st.charger.name}</div>
+                    <div style="font-weight:700; color:var(--text); font-size:1.1rem; margin-bottom:6px;">${st.charger.name}</div>
+                    
+                    <div class="chg-specs">
+                        <span class="chg-chip chip-kw">⚡ ${kw}</span>
+                        <span class="chg-chip chip-auth">📱 ${authNetwork}</span>
+                    </div>
+
                     <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">到着 ${st.socBefore.toFixed(0)}% <span style="color:var(--accent2)">➔</span> 出発 ${st.socAfter.toFixed(0)}%</div>
                     <div>${pois.length ? pois.map(p=>`<span class="poi-tag">#${p}</span>`).join('') : ''}</div>
-                    <div style="margin-top:10px; display:flex; align-items:center; gap:8px;">
-                        <select onchange="updateChgTime(${st.charger.lat}, ${st.charger.lng}, this.value)" style="width:auto; padding:6px; font-size:11px;">
+                    
+                    <div style="margin-top:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <select onchange="updateChgTime(${st.charger.lat}, ${st.charger.lng}, this.value)" style="width:auto; padding:6px; font-size:12px;">
                             <option value="15" ${st.duration == 15 ? 'selected' : ''}>⏱ 15分充電</option>
                             <option value="30" ${st.duration == 30 ? 'selected' : ''}>⏱ 30分充電</option>
                             <option value="45" ${st.duration == 45 ? 'selected' : ''}>⏱ 45分充電</option>
-                            <option value="60" ${st.duration == 60 ? 'selected' : ''}>⏱ 60分充電</option>
+                            <option value="60" ${st.duration == 60 ? 'selected' : ''}>⏱ 60分充電 (満充電推奨)</option>
                         </select>
-                        ${!isEmergency ? `<button class="alt-charger-btn" style="margin-top:0; padding:6px;" onclick="showAlts(${idx})">⟳ 他のSAに変更</button>` : ''}
+                        ${!isEmergency ? `<button class="alt-charger-btn" style="margin-top:0;" onclick="showAlts(${idx})">⟳ 他のSAに変更</button>` : ''}
                     </div>
                     ${!isEmergency ? `<div class="alt-list" id="alt-list-${idx}"></div>` : ''}
                 `;
@@ -382,13 +413,11 @@ async function onCalculate() {
     });
 }
 
-// ★ プルダウンで充電時間が変わったら再計算
 window.updateChgTime = function(lat, lng, mins) {
     userCustomDurations[`${lat.toFixed(4)},${lng.toFixed(4)}`] = parseInt(mins);
     onCalculate();
 }
 
-// ★ 地図上に赤いピン（候補）を表示する機能
 function searchEmergencyChargers(lat, lng) {
     const el = document.getElementById('emergency-list');
     el.style.display = 'flex';
@@ -400,12 +429,11 @@ function searchEmergencyChargers(lat, lng) {
     placesService.textSearch({
         query: 'EV充電スタンド',
         location: new google.maps.LatLng(lat, lng),
-        radius: 15000 // 10%時点からなので15km圏内まで拡大
+        radius: 15000 
     }, (results, status) => {
         if (status === 'OK' && results.length > 0) {
             const topResults = results.slice(0, 5);
             
-            // 地図にピンを立てる
             topResults.forEach((r, i) => {
                 const m = new google.maps.Marker({
                     position: r.geometry.location,
@@ -417,7 +445,6 @@ function searchEmergencyChargers(lat, lng) {
                 emergencyMarkers.push(m);
             });
 
-            // リストに表示
             el.innerHTML = topResults.map((r, i) => `
                 <div class="alt-opt" onclick="addEmergencyWaypoint(${r.geometry.location.lat()}, ${r.geometry.location.lng()}, '${r.name}')" style="border-left: 3px solid #ef4444; background:rgba(239, 68, 68, 0.1); display:flex; align-items:center; gap:8px;">
                     <span style="background:#ef4444; color:#fff; border-radius:50%; min-width:22px; height:22px; display:inline-block; text-align:center; line-height:22px; font-size:12px; font-weight:bold;">${i+1}</span>
@@ -428,7 +455,6 @@ function searchEmergencyChargers(lat, lng) {
                 </div>
             `).join('');
 
-            // マップの視点をピンの集まりにズーム
             const bounds = new google.maps.LatLngBounds();
             bounds.extend(new google.maps.LatLng(lat, lng));
             topResults.forEach(r => bounds.extend(r.geometry.location));
@@ -521,7 +547,6 @@ function drawMarkers(originPoint, destPoint, stops, deadPoint, warningPoint) {
         mapMarkers.push(new google.maps.Marker({ position: destPoint, map: googleMap, label: { text: "G", color: "white" } }));
     } else {
         if(deadPoint) mapMarkers.push(new google.maps.Marker({ position: deadPoint, map: googleMap, label: { text: "☠️", fontSize: "20px" }, title: "電欠地点" }));
-        // 10%地点に警告アイコンを置く
         if(warningPoint) mapMarkers.push(new google.maps.Marker({ position: warningPoint, map: googleMap, label: { text: "⚠️", fontSize: "16px" }, title: "SOC 10%地点" }));
     }
 
@@ -560,7 +585,6 @@ function drawComboChart() {
                         
                         if (mode === 'soc') {
                             const gradient = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
-                            // ★ 20%で赤、50%で黄色、100%でシアン（青）
                             gradient.addColorStop(0, '#ef4444');    
                             gradient.addColorStop(0.2, '#ef4444');  
                             gradient.addColorStop(0.5, '#eab308');  
