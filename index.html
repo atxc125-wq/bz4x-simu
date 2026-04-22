@@ -61,11 +61,11 @@ input:focus, select:focus { outline: none; border-color: var(--accent2); }
     </div>
     <div class="section" style="padding-top:10px;">
         <div class="field"><input type="password" id="api-key" placeholder="API KEY" style="font-family:monospace; font-size:12px;"></div>
-        <div class="field"><label>出発地</label><input type="text" id="origin" value="立川"></div>
+        <div class="field"><label>出発地</label><input type="text" id="origin" value="青森"></div>
         <div class="field"><label>目的地</label><input type="text" id="dest" value="大阪城"></div>
         <div class="stat-grid">
             <div class="field"><label>出発SOC (%)</label><input type="number" id="start-soc" value="100"></div>
-            <div class="field"><label>充電閾値 (%)</label><input type="number" id="threshold-soc" value="50"></div>
+            <div class="field"><label>充電閾値 (%)</label><input type="number" id="threshold-soc" value="20"></div>
         </div>
         <div class="field" style="margin-top:8px;">
             <label>マップ表示モード</label>
@@ -104,12 +104,12 @@ let chargerDB = (typeof CHARGER_DATA !== 'undefined') ? CHARGER_DATA : [];
 let currentSim = null, currentDetailedPath = null;
 let routePolylines = [], comboChart = null, mapMarkers = [];
 let userForcedChargers = []; 
+let userWaypoints = []; // ★ 下道エスケープ用の経由地を保存する配列
 
 Chart.defaults.color = '#94a3b8';
 Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
 
 function initApp() {
-    // DBロード状態の判定
     const dbStatusEl = document.getElementById('db-status');
     if (chargerDB.length > 0) {
         dbStatusEl.innerHTML = `<span style="color:#10b981; font-size:11px; font-weight:bold;">✓ DB: ${chargerDB.length}件ロード済</span>`;
@@ -132,7 +132,13 @@ function initApp() {
     
     new google.maps.places.Autocomplete(document.getElementById('origin'));
     new google.maps.places.Autocomplete(document.getElementById('dest'));
-    document.getElementById('calc-btn').addEventListener('click', () => { userForcedChargers = []; onCalculate(); });
+    
+    // ★ 最初の計算時はウェイポイントをリセットする
+    document.getElementById('calc-btn').addEventListener('click', () => { 
+        userForcedChargers = []; 
+        userWaypoints = [];
+        onCalculate(); 
+    });
     
     document.getElementById('color-mode').addEventListener('change', () => { 
         if(currentSim) { updateMapDrawing(); drawComboChart(); } 
@@ -167,17 +173,17 @@ async function findNearbyPOIs(lat, lng) {
   return results;
 }
 
-async function runSimulation(segments, elevations, params, forced = []) {
+// ★ ウェイポイント情報を追加で受け取るように修正
+async function runSimulation(segments, elevations, params, forced = [], waypointIndexes = []) {
     const { batteryKwh, startSocPct, thresholdSocPct } = params;
     let socKwh = (startSocPct / 100) * batteryKwh, km = 0, time = 0;
     const profile = [], stops = [], fcs = [...forced];
     let pending = null, lastChargeKm = -999;
-    let isDead = false;
+    let isDead = false, deadLocation = null;
 
     for (let i = 0; i < segments.length; i++) {
         const s = segments[i];
         
-        // 512制限のelevations配列と高精細segmentsのインデックスをマッピング
         const progress = i / segments.length;
         const elevIdx = Math.floor(progress * elevations.length);
         const currentElev = elevations[elevIdx] || 0;
@@ -191,7 +197,24 @@ async function runSimulation(segments, elevations, params, forced = []) {
         if (currentSoc <= 0) {
             profile.push({ km, time, soc: 0, speed: 0, elev: currentElev });
             isDead = true;
+            deadLocation = { lat: s.lat, lng: s.lng };
             break; 
+        }
+
+        // ★ 下道エスケープで追加されたウェイポイントでの強制充電処理
+        if (waypointIndexes.includes(i)) {
+            const wpIndex = waypointIndexes.indexOf(i);
+            const wpName = userWaypoints[wpIndex] ? userWaypoints[wpIndex].name : "下道EV充電スタンド";
+            const chg = { km, charger: {name: `🆘 ${wpName}`, lat: s.lat, lng: s.lng}, socBefore: currentSoc, time };
+            chg.socAfter = Math.min(85, currentSoc + 45); 
+            stops.push(chg);
+            
+            profile.push({ km, time, soc: currentSoc, speed: 0, elev: currentElev });
+            time += 30; 
+            socKwh = (chg.socAfter / 100) * batteryKwh;
+            profile.push({ km, time, soc: chg.socAfter, speed: 0, elev: currentElev });
+            
+            lastChargeKm = km;
         }
 
         let fc = fcs.find(f => haversine(f.lat, f.lng, s.lat, s.lng) < 3.0);
@@ -210,43 +233,54 @@ async function runSimulation(segments, elevations, params, forced = []) {
             lastChargeKm = km; pending = null;
         }
 
-        // 自動サーチ： 高精細セグメント化により、常に周囲3km以内の充電器をスキャンし逃さない
         if (!pending && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 50) {
             const found = chargerDB.find(c => haversine(c.lat, c.lng, s.lat, s.lng) < 3.0);
-            if (found) { found.targetIdx = i + 5; pending = found; } // 5セグメント後にピットイン
+            if (found) { found.targetIdx = i + 5; pending = found; }
         }
 
         socKwh = Math.max(0, socKwh - energy);
         km += s.distKm; time += (s.distKm / s.speed) * 60;
         profile.push({ km, time, soc: (socKwh / batteryKwh) * 100, speed: s.speed, elev: currentElev });
     }
-    return { profile, stops, arrivalSoc: isDead ? 0 : (socKwh / batteryKwh) * 100, eta: time, isDead, deadKm: km };
+    return { profile, stops, arrivalSoc: isDead ? 0 : (socKwh / batteryKwh) * 100, eta: time, isDead, deadKm: km, deadLocation };
 }
 
 async function onCalculate() {
-    if(chargerDB.length === 0) return alert('充電器データ(chargers_data.js)がロードされていません！');
-    showLoading('ルートと標高データを解析中...');
+    if(chargerDB.length === 0) return alert('充電器データがロードされていません！');
+    showLoading('最適なルートを計算中...');
     const origin = document.getElementById('origin').value;
     const dest = document.getElementById('dest').value;
     document.getElementById('dead-alert').style.display = 'none';
 
-    directionsService.route({ origin, destination: dest, travelMode: 'DRIVING' }, async (res, status) => {
+    // ★ Directions APIに userWaypoints を渡してリルートさせる
+    directionsService.route({ 
+        origin, 
+        destination: dest, 
+        travelMode: 'DRIVING',
+        waypoints: userWaypoints.map(w => ({ location: new google.maps.LatLng(w.lat, w.lng), stopover: true }))
+    }, async (res, status) => {
         if (status !== 'OK') return hideLoading() || alert('ルートが見つかりません');
 
-        currentDetailedPath = res.routes[0].legs[0].steps.flatMap(s => s.path);
+        currentDetailedPath = res.routes[0].legs.flatMap(leg => leg.steps.flatMap(s => s.path));
         
-        // 【修正点】高速道路ワープバグ解消のため、ルート全体を数十メートル単位のマイクロセグメントに分解
         const segments = [];
-        res.routes[0].legs[0].steps.forEach(step => {
-            const speed = (step.distance.value / step.duration.value) * 3.6 || 60;
-            const path = step.path;
-            for(let i=0; i < path.length - 1; i++) {
-                const distKm = google.maps.geometry.spherical.computeDistanceBetween(path[i], path[i+1]) / 1000;
-                segments.push({ distKm, speed, lat: path[i].lat(), lng: path[i].lng() });
+        const waypointIndexes = []; // ★ ウェイポイント（経由地）があるセグメントのインデックスを記録
+        
+        res.routes[0].legs.forEach((leg, legIdx) => {
+            leg.steps.forEach(step => {
+                const speed = (step.distance.value / step.duration.value) * 3.6 || 60;
+                const path = step.path;
+                for(let i=0; i < path.length - 1; i++) {
+                    const distKm = google.maps.geometry.spherical.computeDistanceBetween(path[i], path[i+1]) / 1000;
+                    segments.push({ distKm, speed, lat: path[i].lat(), lng: path[i].lng() });
+                }
+            });
+            // 最後のLeg以外＝ウェイポイントに到達したタイミングを記録
+            if (legIdx < res.routes[0].legs.length - 1) {
+                waypointIndexes.push(segments.length - 1);
             }
         });
 
-        // 標高は上限512ポイントのため、概要パスから取得
         const overviewPath = res.routes[0].overview_path;
         elevationService.getElevationForLocations({ locations: overviewPath.length > 250 ? overviewPath.filter((_,i)=>i%Math.ceil(overviewPath.length/250)===0) : overviewPath }, async (elevRes) => {
             const elevations = new Array(overviewPath.length).fill(0);
@@ -260,12 +294,20 @@ async function onCalculate() {
                 batteryKwh: 71.4,
                 startSocPct: parseFloat(document.getElementById('start-soc').value),
                 thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value)
-            }, userForcedChargers);
+            }, userForcedChargers, waypointIndexes);
 
+            // ★ 電欠時に下道充電器検索ボタンを表示
             if (currentSim.isDead) {
                 const alertEl = document.getElementById('dead-alert');
                 alertEl.style.display = 'block';
-                alertEl.innerHTML = `⚠️ <b>${currentSim.deadKm.toFixed(0)}km地点で電欠しました！</b><br>充電開始閾値を上げるか、手動で充電スポットを追加してください。`;
+                alertEl.innerHTML = `
+                    ⚠️ <b>${currentSim.deadKm.toFixed(0)}km地点で電欠しました！</b><br>
+                    <div style="margin-top:10px; font-size:12px; color:var(--text);">高速を降りて下道の充電器（eMP/TeraCharge等）を探しますか？</div>
+                    <button class="alt-charger-btn" onclick="searchEmergencyChargers(${currentSim.deadLocation.lat}, ${currentSim.deadLocation.lng})" style="margin-top:6px; background:#ef4444; color:#fff; border:none;">
+                        🆘 電欠地点周辺のEV充電スタンドを検索
+                    </button>
+                    <div id="emergency-list" class="alt-list" style="margin-top:10px; flex-direction:column; gap:6px;"></div>
+                `;
             }
 
             document.getElementById('results').style.display = 'block';
@@ -275,27 +317,61 @@ async function onCalculate() {
             const list = document.getElementById('stop-list'); 
             list.innerHTML = '';
             
-            showLoading('周辺の暇つぶしスポットを検索中...');
+            showLoading('周辺の施設を検索中...');
             for (let idx = 0; idx < currentSim.stops.length; idx++) {
                 const st = currentSim.stops[idx];
-                const pois = await findNearbyPOIs(st.charger.lat, st.charger.lng);
+                // 下道充電器（🆘マーク付き）はPOI検索をスキップして表示をシンプルに
+                const isEmergency = st.charger.name.includes("🆘");
+                const pois = isEmergency ? [] : await findNearbyPOIs(st.charger.lat, st.charger.lng);
+                
                 const div = document.createElement('div'); div.className = 'stop-item';
+                if(isEmergency) div.style.borderColor = '#ef4444';
                 div.innerHTML = `
                     <div style="font-weight:700; color:var(--text); font-size:1.1rem; margin-bottom:4px;">${st.charger.name}</div>
                     <div style="font-size:12px; color:var(--muted);">到着 ${st.socBefore.toFixed(0)}% <span style="color:var(--accent2)">➔</span> 出発 ${st.socAfter.toFixed(0)}%</div>
                     <div>${pois.length ? pois.map(p=>`<span class="poi-tag">#${p}</span>`).join('') : ''}</div>
-                    <button class="alt-charger-btn" onclick="showAlts(${idx})">⟳ 前後のSA/PAに変更する</button>
-                    <div class="alt-list" id="alt-list-${idx}"></div>
+                    ${!isEmergency ? `<button class="alt-charger-btn" onclick="showAlts(${idx})">⟳ 前後のSA/PAに変更する</button><div class="alt-list" id="alt-list-${idx}"></div>` : ''}
                 `;
                 list.appendChild(div);
             }
 
             updateMapDrawing();
-            drawMarkers(currentDetailedPath[0], currentDetailedPath[currentDetailedPath.length - 1], currentSim.stops, currentSim.isDead ? currentDetailedPath[Math.floor(currentDetailedPath.length * (currentSim.profile.length / segments.length))] : null);
+            drawMarkers(currentDetailedPath[0], currentDetailedPath[currentDetailedPath.length - 1], currentSim.stops, currentSim.isDead ? currentSim.deadLocation : null);
             drawComboChart();
             hideLoading();
         });
     });
+}
+
+// ★ Places APIを使って電欠地点周辺の充電器を検索する機能
+function searchEmergencyChargers(lat, lng) {
+    const el = document.getElementById('emergency-list');
+    el.style.display = 'flex';
+    el.innerHTML = '<div class="spinner" style="width:20px;height:20px;border-width:2px;margin:0 auto;"></div>';
+    
+    placesService.textSearch({
+        query: 'EV充電スタンド',
+        location: new google.maps.LatLng(lat, lng),
+        radius: 10000 // 半径10km以内を全力検索
+    }, (results, status) => {
+        if (status === 'OK' && results.length > 0) {
+            el.innerHTML = results.slice(0, 5).map(r => `
+                <div class="alt-opt" onclick="addEmergencyWaypoint(${r.geometry.location.lat()}, ${r.geometry.location.lng()}, '${r.name}')" style="border-left: 3px solid #ef4444; background:rgba(239, 68, 68, 0.1);">
+                    📍 ${r.name}<br>
+                    <span style="font-size:10px; color:var(--muted)">ここを経由地に追加してルートを引き直す</span>
+                </div>
+            `).join('');
+        } else {
+            el.innerHTML = '<div style="font-size:12px; color:#fca5a5; text-align:center;">周辺に見つかりませんでした...JAFを呼びましょう🚨</div>';
+        }
+    });
+}
+
+// ★ 経由地に追加して再計算
+function addEmergencyWaypoint(lat, lng, name) {
+    userWaypoints.push({ lat, lng, name });
+    document.getElementById('dead-alert').style.display = 'none';
+    onCalculate(); // ルート再計算
 }
 
 function updateMapDrawing() {
@@ -341,9 +417,19 @@ function showAlts(idx) {
     if (el.innerHTML) return;
     
     const curStop = currentSim.stops[idx];
-    const alts = chargerDB.filter(c => haversine(c.lat, c.lng, curStop.charger.lat, curStop.charger.lng) < 60 && c.type === 'sa_pa').slice(0, 5);
     
-    el.innerHTML = alts.map(a => `<div class="alt-opt" onclick="forceChg(${a.lat}, ${a.lng}, ${idx})">${a.name} (${a.powerKw}kW)</div>`).join('');
+    const alts = chargerDB
+        .map(c => ({ ...c, dist: haversine(c.lat, c.lng, curStop.charger.lat, curStop.charger.lng) }))
+        .filter(c => c.dist > 0.1 && c.dist < 60 && c.type === 'sa_pa')
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 5);
+    
+    el.innerHTML = alts.map(a => `
+        <div class="alt-opt" onclick="forceChg(${a.lat}, ${a.lng}, ${idx})" style="display:flex; justify-content:space-between; align-items:center;">
+            <span>${a.name} <span style="font-size:10px; color:var(--muted)">(${a.powerKw}kW)</span></span>
+            <span style="background:rgba(6,182,212,0.15); color:var(--accent2); padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold;">約 ${a.dist.toFixed(1)}km</span>
+        </div>
+    `).join('');
 }
 
 async function forceChg(lat, lng, idx) {
@@ -366,10 +452,12 @@ function drawMarkers(originPoint, destPoint, stops, deadPoint) {
 
     const chargerSvg = "M7 2v11h3v9l7-12h-4l4-8z"; 
     stops.forEach(st => {
+        // 下道エスケープ充電器は色を赤っぽくする
+        const isEmergency = st.charger.name.includes("🆘");
         mapMarkers.push(new google.maps.Marker({
             position: { lat: st.charger.lat, lng: st.charger.lng },
             map: googleMap, title: st.charger.name,
-            icon: { path: chargerSvg, fillColor: "#10b981", fillOpacity: 1, strokeWeight: 1, strokeColor: "#ffffff", scale: 1.5, anchor: new google.maps.Point(10, 10) }
+            icon: { path: chargerSvg, fillColor: isEmergency ? "#ef4444" : "#10b981", fillOpacity: 1, strokeWeight: 1, strokeColor: "#ffffff", scale: 1.5, anchor: new google.maps.Point(10, 10) }
         }));
     });
 }
