@@ -12,122 +12,109 @@
   --bg: #0f172a; --panel: #1e293b; --border: #334155;
   --accent: #3b82f6; --accent2: #06b6d4;
   --text: #f1f5f9; --muted: #94a3b8;
-  --green: #22c55e; --amber: #f59e0b; --red: #ef4444;
-  --radius: 8px;
+  --radius: 12px;
 }
-body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; min-height: 100vh; }
+body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; min-height: 100vh; }
 #app { display: flex; height: 100vh; overflow: hidden; }
-#left { width: 340px; min-width: 280px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; }
-#right { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
-.section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
-.field { margin-bottom: 10px; }
-label { display: block; font-size: .75rem; color: var(--muted); margin-bottom: 3px; }
-input, select { width: 100%; background: #0f172a; border: 1px solid var(--border); color: var(--text); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; }
-#calc-btn { width: 100%; padding: 12px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 10px; transition: 0.2s; }
-#calc-btn:hover { background: #2563eb; }
-.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.stat { background: #0f172a; border-radius: var(--radius); padding: 10px; text-align: center; }
-.stat .val { font-size: 1.3rem; font-weight: 700; color: var(--accent2); }
-.stop-item { background: #0f172a; border-radius: var(--radius); padding: 12px; margin-bottom: 8px; border-left: 4px solid var(--green); }
-.poi-tag { display: inline-block; background: #1e3a5f; color: #93c5fd; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-right: 4px; margin-top: 5px; }
-#map { flex-shrink: 0; height: 45%; min-height: 300px; background: #1e293b; }
-.chart-wrap { padding: 12px 16px; border-bottom: 1px solid var(--border); position: relative; flex: 1; min-height: 200px; }
-.chart-ctrl { position: absolute; top: 12px; right: 16px; z-index: 10; display: flex; gap: 4px; }
-.ctrl-btn { background: #334155; border: none; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; }
-.ctrl-btn.active { background: var(--accent2); }
-#loading { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.8); z-index: 9999; align-items: center; justify-content: center; flex-direction: column; gap: 12px; }
+#left { width: 360px; min-width: 300px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; box-shadow: 4px 0 15px rgba(0,0,0,0.3); z-index: 10; }
+#right { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+.section { padding: 20px; border-bottom: 1px solid var(--border); }
+.field { margin-bottom: 12px; }
+label { display: block; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; font-weight: 600; }
+input, select { width: 100%; background: #0f172a; border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 10px; font-size: 14px; transition: border 0.2s; }
+input:focus { outline: none; border-color: var(--accent2); }
+#calc-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #3b82f6, #06b6d4); color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 700; cursor: pointer; transition: 0.3s; box-shadow: 0 4px 12px rgba(6, 182, 212, 0.2); }
+#calc-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(6, 182, 212, 0.4); }
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.stat { background: #0f172a; border-radius: 8px; padding: 12px; text-align: center; border: 1px solid var(--border); }
+.stat .val { font-size: 1.5rem; font-weight: 700; color: var(--accent2); }
+.stop-item { background: #0f172a; border-radius: 8px; padding: 14px; margin-bottom: 10px; border-left: 4px solid #10b981; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.poi-tag { display: inline-block; background: rgba(59, 130, 246, 0.15); color: #93c5fd; font-size: 10px; padding: 3px 8px; border-radius: 12px; margin-right: 6px; margin-top: 8px; border: 1px solid rgba(59, 130, 246, 0.3); }
+#map { flex: 1.3; background: #1e293b; position: relative; }
+.chart-wrap { padding: 16px 20px; background: var(--panel); flex: 0.7; position: relative; border-top: 1px solid var(--border); display: flex; flex-direction: column; }
+.chart-container { flex: 1; position: relative; min-height: 0; }
+.chart-title { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 8px; font-weight: 600; }
+#loading { display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.85); z-index: 9999; align-items: center; justify-content: center; flex-direction: column; gap: 16px; backdrop-filter: blur(4px); }
 #loading.show { display: flex; }
-.spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent2); border-radius: 50%; animation: spin .8s linear infinite; }
+.spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent2); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 860px) {
-  #app { flex-direction: column; height: auto; overflow: visible; }
-  #left { width: 100%; border-right: none; }
-  #map { height: 350px; }
-  .chart-wrap { min-height: 250px; }
-}
 </style>
 </head>
 <body>
-<div id="loading"><div class="spinner"></div><div id="loading-msg">計算中...</div></div>
+<div id="loading"><div class="spinner"></div><div id="loading-msg">ルートを解析中...</div></div>
 <div id="app">
   <div id="left">
-    <div class="section"><h1>BZ4X Trip Optimizer Pro</h1></div>
-    <div class="section" style="padding-top:0; border-bottom:none;">
-      <label style="font-size:10px;">Google Maps API Key</label>
-      <input type="password" id="api-key" placeholder="APIキーを入力してリロード" style="padding:4px; font-size:11px;">
+    <div class="section">
+        <h2 style="font-size:1.2rem; color:var(--text); display:flex; align-items:center; gap:8px;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent2)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+            BZ4X Trip Optimizer
+        </h2>
     </div>
-    <div class="section" style="border-top: 1px solid var(--border);">
-      <div class="field"><label>予定日</label><input type="date" id="trip-date"></div>
-      <div class="field"><label>出発地</label><input type="text" id="origin" value="東京"></div>
-      <div class="field"><label>目的地</label><input type="text" id="dest" value="大阪"></div>
-      <div class="row2">
-        <div class="field"><label>出発SOC (%)</label><input type="number" id="start-soc" value="100"></div>
-        <div class="field"><label>充電閾値 (%)</label><input type="number" id="threshold-soc" value="20"></div>
-      </div>
-      <button id="calc-btn">適応型シミュレーション開始</button>
+    <div class="section" style="padding-top:10px;">
+        <div class="field"><label>API KEY</label><input type="password" id="api-key" placeholder="••••••••••••••••" style="font-family:monospace; font-size:12px;"></div>
+        <div class="field"><label>予定日</label><input type="date" id="trip-date"></div>
+        <div class="field"><label>出発地</label><input type="text" id="origin" value="立川"></div>
+        <div class="field"><label>目的地</label><input type="text" id="dest" value="大阪城"></div>
+        <div class="stat-grid">
+            <div class="field"><label>出発SOC (%)</label><input type="number" id="start-soc" value="100"></div>
+            <div class="field"><label>充電閾値 (%)</label><input type="number" id="threshold-soc" value="20"></div>
+        </div>
+        <button id="calc-btn" style="margin-top:8px;">シミュレーション開始</button>
     </div>
-    <div class="section" id="results" style="display:none">
-      <div class="stat-grid">
-        <div class="stat"><div class="val" id="r-eta">--:--</div><div class="lbl">総所要時間</div></div>
-        <div class="stat"><div class="val" id="r-soc">--%</div><div class="lbl">到着SOC</div></div>
-      </div>
-      <div id="stop-list" style="margin-top:15px"></div>
+    <div class="section" id="results" style="display:none; border-bottom:none;">
+        <div class="stat-grid">
+            <div class="stat"><div class="lbl">総所要時間</div><div class="val" id="r-eta">--:--</div></div>
+            <div class="stat"><div class="lbl">到着SOC</div><div class="val" id="r-soc">--%</div></div>
+        </div>
+        <div id="stop-list" style="margin-top:20px"></div>
     </div>
   </div>
   <div id="right">
     <div id="map"></div>
     <div class="chart-wrap">
-      <div class="chart-ctrl">
-        <button class="ctrl-btn active" id="btn-time" onclick="setAxis('time')">時間軸</button>
-        <button class="ctrl-btn" id="btn-dist" onclick="setAxis('dist')">距離軸</button>
-      </div>
-      <canvas id="soc-chart"></canvas>
-    </div>
-    <div class="chart-wrap">
-      <div style="font-size:11px; color:var(--muted); position:absolute; top:12px; left:16px;">標高プロファイル</div>
-      <canvas id="elev-chart"></canvas>
+        <div class="chart-title">SOC / 標高 プロファイル</div>
+        <div class="chart-container">
+            <canvas id="combo-chart"></canvas>
+        </div>
     </div>
   </div>
 </div>
 
 <script>
-let googleMap, directionsService, elevationService, placesService;
+let googleMap, directionsService, placesService, elevationService;
 let chargerDB = (typeof CHARGER_DATA !== 'undefined') ? CHARGER_DATA : [];
-let currentSim = null, currentAxis = 'time', routePolylines = [];
-let socChart = null, elevChart = null;
+let currentSim = null, routePolylines = [], comboChart = null;
 
-async function fetchTemp(lat, lng, dateStr) {
-    const d = dateStr ? new Date(dateStr) : new Date();
-    const month = isNaN(d) ? 4 : d.getMonth() + 1;
-    try {
-        const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lng}&start_date=2023-${String(month).padStart(2,'0')}-01&end_date=2023-${String(month).padStart(2,'0')}-05&daily=temperature_2m_mean&timezone=Asia%2FTokyo`;
-        const r = await fetch(url);
-        const data = await r.json();
-        return data.daily.temperature_2m_mean[0] || 15;
-    } catch(e) { return 15; }
-}
+// Chart.js の全体設定をダークモードのプレミアム仕様に変更
+Chart.defaults.color = '#94a3b8';
+Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
 
 function initApp() {
-  googleMap = new google.maps.Map(document.getElementById('map'), {
-    center: { lat: 35.5, lng: 138.0 }, zoom: 6, styles: [{elementType:'geometry',stylers:[{color:'#1e293b'}]},{featureType:'water',stylers:[{color:'#0f172a'}]}]
-  });
-  directionsService = new google.maps.DirectionsService();
-  elevationService = new google.maps.ElevationService();
-  placesService = new google.maps.places.PlacesService(googleMap);
-  
-  new google.maps.places.Autocomplete(document.getElementById('origin'));
-  new google.maps.places.Autocomplete(document.getElementById('dest'));
-
-  document.getElementById('calc-btn').addEventListener('click', onCalculate);
+    googleMap = new google.maps.Map(document.getElementById('map'), {
+        center: { lat: 35.6, lng: 139.0 }, zoom: 7,
+        styles: [
+            {elementType:'geometry',stylers:[{color:'#1e293b'}]},{featureType:'water',stylers:[{color:'#0f172a'}]},
+            {featureType:'road',elementType:'geometry',stylers:[{color:'#334155'}]},{featureType:'road',elementType:'labels.text.fill',stylers:[{color:'#94a3b8'}]},
+            {featureType:'poi',stylers:[{visibility:'off'}]} // マップ上の余計なアイコンを消して線を際立たせる
+        ],
+        disableDefaultUI: true, zoomControl: true // UIをスッキリさせる
+    });
+    directionsService = new google.maps.DirectionsService();
+    elevationService = new google.maps.ElevationService();
+    placesService = new google.maps.places.PlacesService(googleMap);
+    
+    new google.maps.places.Autocomplete(document.getElementById('origin'));
+    new google.maps.places.Autocomplete(document.getElementById('dest'));
+    document.getElementById('calc-btn').addEventListener('click', onCalculate);
 }
 
-function haversine(l1, g1, l2, g2) {
-    const R=6371, dL=(l2-l1)*Math.PI/180, dG=(g2-g1)*Math.PI/180;
-    const a=Math.sin(dL/2)**2 + Math.cos(l1*Math.PI/180)*Math.cos(l2*Math.PI/180)*Math.sin(dG/2)**2;
-    return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+// SOC(0〜100)から美しいグラデーションカラー(青→緑→黄→赤)を生成
+function getSocColor(soc) {
+    const hue = Math.max(0, Math.min(240, (soc / 100) * 240)); 
+    return `hsl(${hue}, 100%, 45%)`;
 }
 
-// 施設検索（完全復活）
+// 施設検索
 async function findNearbyPOIs(lat, lng) {
   const types = ['convenience_store', 'restaurant', 'shopping_mall'];
   const labels = { convenience_store:'コンビニ', restaurant:'飲食店', shopping_mall:'モール' };
@@ -141,192 +128,218 @@ async function findNearbyPOIs(lat, lng) {
   return results;
 }
 
-async function runSimulation(segments, elevations, dateStr, params) {
-  const { batteryKwh, startSocPct, thresholdSocPct } = params;
-  let socKwh = (startSocPct/100)*batteryKwh, km = 0, time = 0;
-  let lastWeatherKm = -999, curTemp = 20, lastChargeKm = -999;
-  const profile = [], stops = [];
-  let pending = null;
+async function runSimulation(segments, elevations, params) {
+    const { batteryKwh, startSocPct, thresholdSocPct } = params;
+    let socKwh = (startSocPct / 100) * batteryKwh, km = 0, time = 0;
+    const profile = [], stops = [];
+    let pending = null, lastChargeKm = -999;
 
-  for (let i = 0; i < segments.length; i++) {
-    const s = segments[i];
-    const currentElev = elevations[i];
+    for (let i = 0; i < segments.length; i++) {
+        const s = segments[i];
+        const currentElev = elevations[i] || 0;
+        
+        // 簡易的な標高差エネルギー計算を追加してリアリティを上げる
+        const elevDiff = i < segments.length-1 ? ((elevations[i+1]||0) - currentElev) : 0;
+        const elevEnergy = (elevDiff * 2200 * 9.8) / 3.6e6;
+        const baseEff = s.speed > 80 ? 5.0 : 7.2; 
+        const energy = (s.distKm / baseEff) + elevEnergy;
+        const currentSoc = (socKwh / batteryKwh) * 100;
 
-    if (Math.abs(km - lastWeatherKm) > 100) {
-        showLoading(`環境データ解析中: ${km.toFixed(0)}km地点...`);
-        curTemp = await fetchTemp(s.lat, s.lng, dateStr);
-        lastWeatherKm = km;
+        if (pending && i >= pending.targetIdx) {
+            const chg = { km, charger: pending, socBefore: currentSoc, time };
+            chg.socAfter = Math.min(85, currentSoc + 45); // 約30分充電の想定
+            stops.push(chg);
+            
+            // グラフを垂直に立ち上げるためのポイント
+            profile.push({ km, time, soc: currentSoc, elev: currentElev });
+            time += 30; 
+            socKwh = (chg.socAfter / 100) * batteryKwh;
+            profile.push({ km, time, soc: chg.socAfter, elev: currentElev });
+            
+            lastChargeKm = km; pending = null;
+        }
+
+        if (!pending && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 50) {
+            const found = chargerDB.find(c => Math.abs(c.lat - s.lat) + Math.abs(c.lng - s.lng) < 0.05);
+            if (found) { found.targetIdx = i + 2; pending = found; }
+        }
+
+        socKwh = Math.max(0, socKwh - energy);
+        km += s.distKm; time += (s.distKm / s.speed) * 60;
+        profile.push({ km, time, soc: (socKwh / batteryKwh) * 100, elev: currentElev });
     }
-    
-    // 標高による断熱減率(-0.6度/100m) ＋ 気温係数
-    const localTemp = curTemp - ((currentElev / 100) * 0.6);
-    const tempFactor = 1.0 - (localTemp < 20 ? (20 - localTemp) * 0.015 : 0);
-    const baseEff = s.speed > 75 ? 5.0 : 7.2; 
-    
-    // 標高差によるエネルギー増減を計算に追加
-    const elevEnergy = i < segments.length-1 ? ((elevations[i+1]-currentElev) * 2200 * 9.8 / 3.6e6) : 0;
-    const energy = (s.distKm / (baseEff * tempFactor)) + elevEnergy; 
-    const currentSoc = (socKwh/batteryKwh)*100;
-
-    if (pending && i >= pending.targetIdx) {
-      const chg = { km, charger: pending, socBefore: currentSoc, time };
-      chg.duration = 30;
-      chg.socAfter = Math.min(85, currentSoc + (45/60*30/batteryKwh*100)); // 45kWで30分
-      stops.push(chg);
-      
-      profile.push({ xDist: km, xTime: time, ySoc: currentSoc, lat: s.lat, lng: s.lng, elev: currentElev });
-      time += 30; 
-      socKwh = (chg.socAfter/100)*batteryKwh;
-      profile.push({ xDist: km, xTime: time, ySoc: chg.socAfter, lat: s.lat, lng: s.lng, elev: currentElev });
-      
-      lastChargeKm = km; 
-      pending = null;
-    }
-
-    if (!pending && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 30) {
-      const found = chargerDB.find(c => haversine(c.lat, c.lng, s.lat, s.lng) < 3.0);
-      if (found) { found.targetIdx = i + 1; pending = found; }
-    }
-
-    socKwh = Math.max(0, socKwh - energy);
-    km += s.distKm; time += (s.distKm/s.speed)*60;
-    // 細かくプロットしてなめらかな線にする
-    profile.push({ xDist: km, xTime: time, ySoc: (socKwh/batteryKwh)*100, lat: s.lat, lng: s.lng, elev: currentElev });
-  }
-  return { profile, stops, arrivalSoc: (socKwh/batteryKwh)*100, eta: time };
+    return { profile, stops, arrivalSoc: (socKwh / batteryKwh) * 100, eta: time };
 }
 
 async function onCalculate() {
-  showLoading('ルートと標高を取得中...');
-  const origin = document.getElementById('origin').value;
-  const dest = document.getElementById('dest').value;
-  
-  directionsService.route({ origin, destination: dest, travelMode: 'DRIVING' }, async (res, status) => {
-    if(status!=='OK') return hideLoading()||alert('ルートが見つかりません。');
+    showLoading('ルートと標高データを解析中...');
+    const origin = document.getElementById('origin').value;
+    const dest = document.getElementById('dest').value;
+
+    directionsService.route({ origin, destination: dest, travelMode: 'DRIVING' }, async (res, status) => {
+        if (status !== 'OK') return hideLoading() || alert('ルートが見つかりません');
+
+        // ① 高精細な道路パスを取得（道路のカーブに完全に沿うためのデータ）
+        const detailedPath = res.routes[0].legs[0].steps.flatMap(s => s.path);
+        
+        // ② シミュレーション用のセグメント作成
+        const segments = res.routes[0].legs[0].steps.map(s => ({
+            distKm: s.distance.value / 1000,
+            speed: (s.distance.value / s.duration.value) * 3.6 || 60,
+            lat: s.start_location.lat(), lng: s.start_location.lng()
+        }));
+
+        // ③ 標高データの取得
+        const overviewPath = res.routes[0].overview_path;
+        elevationService.getElevationForLocations({ locations: overviewPath.length > 200 ? overviewPath.filter((_,i)=>i%Math.ceil(overviewPath.length/200)===0) : overviewPath }, async (elevRes) => {
+            const elevations = new Array(segments.length).fill(0);
+            if(elevRes) {
+                for(let i=0; i<segments.length; i++) {
+                    elevations[i] = elevRes[Math.floor((i/segments.length) * elevRes.length)]?.elevation || 0;
+                }
+            }
+
+            // シミュレーション実行
+            currentSim = await runSimulation(segments, elevations, {
+                batteryKwh: 71.4,
+                startSocPct: parseFloat(document.getElementById('start-soc').value),
+                thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value)
+            });
+
+            // UI更新
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('r-soc').textContent = currentSim.arrivalSoc.toFixed(0) + '%';
+            document.getElementById('r-eta').textContent = Math.floor(currentSim.eta / 60) + 'h ' + Math.round(currentSim.eta % 60) + 'm';
+
+            const list = document.getElementById('stop-list'); 
+            list.innerHTML = '';
+            
+            showLoading('周辺の暇つぶしスポットを検索中...');
+            for (const st of currentSim.stops) {
+                const pois = await findNearbyPOIs(st.charger.lat, st.charger.lng);
+                const div = document.createElement('div'); div.className = 'stop-item';
+                div.innerHTML = `<div style="font-weight:700; color:var(--text); font-size:1.1rem; margin-bottom:4px;">${st.charger.name}</div>
+                                 <div style="font-size:12px; color:var(--muted);">到着 ${st.socBefore.toFixed(0)}% <span style="color:var(--accent2)">➔</span> 出発 ${st.socAfter.toFixed(0)}%</div>
+                                 <div>${pois.length ? pois.map(p=>`<span class="poi-tag">#${p}</span>`).join('') : '<span style="font-size:11px;color:#64748b;">周辺施設なし</span>'}</div>`;
+                list.appendChild(div);
+            }
+
+            // 描画実行
+            drawGradientRoute(detailedPath);
+            drawComboChart();
+            hideLoading();
+        });
+    });
+}
+
+// 道路にピッタリ沿ったグラデーションラインの描画
+function drawGradientRoute(detailedPath) {
+    routePolylines.forEach(p => p.setMap(null));
+    routePolylines = [];
+
+    // 高精細パスを100個の滑らかなチャンクに分割してグラデーションを表現
+    const chunks = 100;
+    const pointsPerChunk = Math.ceil(detailedPath.length / chunks);
+
+    for (let i = 0; i < chunks; i++) {
+        const startIdx = i * pointsPerChunk;
+        const endIdx = Math.min((i + 1) * pointsPerChunk, detailedPath.length - 1);
+        if (startIdx >= endIdx) break;
+
+        // 線の切れ目をなくすために+1して繋げる
+        const pathChunk = detailedPath.slice(startIdx, endIdx + 2); 
+        
+        // この区間のSOCをシミュレーション結果から割り出す
+        const progress = startIdx / detailedPath.length;
+        const simIdx = Math.min(currentSim.profile.length - 1, Math.floor(progress * currentSim.profile.length));
+        const soc = currentSim.profile[simIdx].soc;
+
+        routePolylines.push(new google.maps.Polyline({
+            path: pathChunk,
+            strokeColor: getSocColor(soc),
+            strokeWeight: 7,
+            strokeOpacity: 0.9,
+            map: googleMap
+        }));
+    }
+
+    const bounds = new google.maps.LatLngBounds();
+    detailedPath.filter((_,i)=>i%10===0).forEach(p => bounds.extend(p));
+    googleMap.fitBounds(bounds);
+}
+
+// プレミアム仕様の複合グラフ（SOC + 標高）
+function drawComboChart() {
+    if (comboChart) comboChart.destroy();
     
-    const steps = res.routes[0].legs[0].steps;
-    const path = res.routes[0].overview_path;
-    const segments = steps.map(s => ({ 
-        distKm: s.distance.value/1000, 
-        speed: (s.distance.value/s.duration.value)*3.6||60, 
-        lat: s.start_location.lat(), 
-        lng: s.start_location.lng() 
-    }));
-    
-    // 標高の一括取得（なめらかさのキモ）
-    elevationService.getElevationForLocations({ locations: path.length > 200 ? path.filter((_,i)=>i%Math.ceil(path.length/200)===0) : path }, async (elevRes) => {
-        const elevations = new Array(segments.length).fill(0);
-        if(elevRes) {
-            for(let i=0; i<segments.length; i++) {
-                const idx = Math.floor((i/segments.length) * elevRes.length);
-                elevations[i] = elevRes[idx] ? elevRes[idx].elevation : 0;
+    comboChart = new Chart(document.getElementById('combo-chart'), {
+        type: 'line',
+        data: {
+            datasets: [
+                {
+                    label: 'SOC (%)',
+                    data: currentSim.profile.map(p => ({ x: p.time, y: p.soc })),
+                    yAxisID: 'y',
+                    borderWidth: 3,
+                    pointRadius: 0,
+                    tension: 0.3, // スッと美しい曲線
+                    fill: true,
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    // グラフの線自体もグラデーションにする（超絶Pro仕様）
+                    segment: { borderColor: ctx => getSocColor(ctx.p1.raw.y) }
+                },
+                {
+                    label: '標高 (m)',
+                    data: currentSim.profile.map(p => ({ x: p.time, y: Math.max(0, p.elev) })),
+                    yAxisID: 'y1',
+                    borderColor: 'rgba(148, 163, 184, 0.4)',
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    tension: 0.4,
+                    fill: true,
+                    backgroundColor: 'rgba(148, 163, 184, 0.05)'
+                }
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: { legend: { display: false }, tooltip: { backgroundColor: 'rgba(15,23,42,0.9)' } },
+            scales: {
+                x: { 
+                    type: 'linear', 
+                    grid: { color: 'rgba(51, 65, 85, 0.5)' },
+                    ticks: { callback: v => Math.floor(v/60)+'h'+Math.round(v%60)+'m' } 
+                },
+                y: { 
+                    type: 'linear', display: true, position: 'left', min: 0, max: 100,
+                    grid: { color: 'rgba(51, 65, 85, 0.5)' }
+                },
+                y1: { 
+                    type: 'linear', display: true, position: 'right', min: 0,
+                    grid: { drawOnChartArea: false },
+                    ticks: { color: 'rgba(148, 163, 184, 0.7)' }
+                }
             }
         }
-
-        currentSim = await runSimulation(segments, elevations, document.getElementById('trip-date').value, {
-            batteryKwh: 71.4, 
-            startSocPct: parseFloat(document.getElementById('start-soc').value), 
-            thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value)
-        });
-
-        document.getElementById('results').style.display = 'block';
-        document.getElementById('r-soc').textContent = currentSim.arrivalSoc.toFixed(0) + '%';
-        document.getElementById('r-eta').textContent = Math.floor(currentSim.eta/60) + '時間' + Math.round(currentSim.eta%60) + '分';
-        
-        // リスト生成 ＋ POI自動検索
-        const list = document.getElementById('stop-list');
-        list.innerHTML = '';
-        showLoading('周辺施設を検索中...');
-        for (const st of currentSim.stops) {
-            const pois = await findNearbyPOIs(st.charger.lat, st.charger.lng);
-            const div = document.createElement('div');
-            div.className = 'stop-item';
-            div.innerHTML = `<div style="font-weight:bold;color:var(--accent2);font-size:14px;">${st.charger.name}</div>
-                             <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">到着: ${st.socBefore.toFixed(0)}% → 出発: ${st.socAfter.toFixed(0)}% (30分充電)</div>
-                             <div>${pois.length ? pois.map(p=>`<span class="poi-tag">#${p}</span>`).join('') : '<span style="font-size:10px;color:#64748b;">周辺施設なし</span>'}</div>`;
-            list.appendChild(div);
-        }
-
-        renderCharts();
-        hideLoading();
     });
-  });
 }
 
-function setAxis(a) {
-    currentAxis = a;
-    document.getElementById('btn-time').classList.toggle('active', a==='time');
-    document.getElementById('btn-dist').classList.toggle('active', a==='dist');
-    renderCharts();
-}
-
-function renderCharts() {
-  if (!currentSim) return;
-  
-  // SOCチャート
-  const socData = currentSim.profile.map(p => ({ x: currentAxis==='time'?p.xTime:p.xDist, y: p.ySoc }));
-  if (socChart) socChart.destroy();
-  socChart = new Chart(document.getElementById('soc-chart'), {
-    type: 'line', 
-    data: { datasets: [{ data: socData, pointRadius: 0, borderWidth: 3, borderColor: '#3b82f6', tension: 0.2 }]},
-    options: { 
-        responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-        scales: { 
-            x: { type: 'linear', ticks: { callback: v => currentAxis==='time'?Math.floor(v/60)+'h'+Math.round(v%60)+'m' : v.toFixed(0)+'km'} },
-            y: { min: 0, max: 100 }
-        }
-    }
-  });
-
-  // 標高チャート（復活）
-  const elevData = currentSim.profile.map(p => ({ x: currentAxis==='time'?p.xTime:p.xDist, y: Math.max(0, p.elev) }));
-  if (elevChart) elevChart.destroy();
-  elevChart = new Chart(document.getElementById('elev-chart'), {
-    type: 'line', 
-    data: { datasets: [{ data: elevData, pointRadius: 0, borderWidth: 1, borderColor: '#06b6d4', fill: true, backgroundColor: 'rgba(6,182,212,0.1)' }]},
-    options: { 
-        responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: {enabled: false} },
-        scales: { 
-            x: { type: 'linear', display: false },
-            y: { beginAtZero: true }
-        }
-    }
-  });
-
-  // マップのライン（間引きなし、なめらかグラデーション）
-  routePolylines.forEach(p => p.setMap(null));
-  routePolylines = [];
-  for(let i=0; i<currentSim.profile.length-1; i++) {
-    const p1 = currentSim.profile[i], p2 = currentSim.profile[i+1];
-    if(!p1.lat) continue;
-    const s = p1.ySoc;
-    const r = Math.floor(Math.max(0, Math.min(255, (100-s)*4)));
-    const b = Math.floor(Math.max(0, Math.min(255, s*2.5)));
-    routePolylines.push(new google.maps.Polyline({
-      path: [{lat:p1.lat, lng:p1.lng}, {lat:p2.lat, lng:p2.lng}],
-      strokeColor: `rgb(${r}, 100, ${b})`, strokeWeight: 6, strokeOpacity: 0.9, map: googleMap
-    }));
-  }
-}
-
-function showLoading(m) { document.getElementById('loading-msg').textContent=m; document.getElementById('loading').classList.add('show'); }
+function showLoading(m) { document.getElementById('loading-msg').textContent = m; document.getElementById('loading').classList.add('show'); }
 function hideLoading() { document.getElementById('loading').classList.remove('show'); }
 
 window.onload = () => {
-  const savedKey = localStorage.getItem('gmaps_key');
-  const input = document.getElementById('api-key');
-  if(savedKey) input.value = savedKey;
-
-  input.addEventListener('change', (e) => {
-      localStorage.setItem('gmaps_key', e.target.value);
-      location.reload();
-  });
-
-  if(savedKey) {
-    const s = document.createElement('script');
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${savedKey}&libraries=places&callback=initApp`;
-    document.head.appendChild(s);
-  }
+    const key = localStorage.getItem('gmaps_key');
+    if (key) document.getElementById('api-key').value = key;
+    document.getElementById('api-key').addEventListener('change', (e) => {
+        localStorage.setItem('gmaps_key', e.target.value);
+        location.reload();
+    });
+    if (key) {
+        const s = document.createElement('script');
+        s.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places&callback=initApp`;
+        document.head.appendChild(s);
+    }
 };
 </script>
 </body>
