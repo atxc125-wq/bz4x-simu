@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BZ4X Trip Optimizer</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
 <script src="chargers_data.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -29,8 +28,8 @@ input, select { width: 100%; background: #0f172a; border: 1px solid var(--border
 .stat { background: #0f172a; border-radius: var(--radius); padding: 10px; text-align: center; }
 .stat .val { font-size: 1.2rem; font-weight: 700; color: var(--accent2); }
 .stop-item { background: #0f172a; border-radius: var(--radius); padding: 12px; margin-bottom: 8px; border-left: 4px solid var(--green); }
-#map { flex-shrink: 0; height: 350px; background: #1e293b; }
-.chart-wrap { padding: 16px; border-bottom: 1px solid var(--border); position: relative; min-height: 220px; }
+#map { flex-shrink: 0; height: 400px; background: #1e293b; }
+.chart-wrap { padding: 16px; border-bottom: 1px solid var(--border); position: relative; min-height: 220px; flex: 1; }
 .chart-ctrl { position: absolute; top: 12px; right: 16px; z-index: 10; display: flex; gap: 4px; }
 .ctrl-btn { background: #334155; border: none; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; }
 .ctrl-btn.active { background: var(--accent2); }
@@ -81,36 +80,34 @@ input, select { width: 100%; background: #0f172a; border: 1px solid var(--border
       </div>
       <canvas id="soc-chart"></canvas>
     </div>
-    <div class="chart-wrap"><canvas id="elev-chart"></canvas></div>
   </div>
 </div>
 
 <script>
-let googleMap, directionsService, elevationService, placesService;
+let googleMap, directionsService, placesService;
 let chargerDB = (typeof CHARGER_DATA !== 'undefined') ? CHARGER_DATA : [];
 let currentSim = null, currentAxis = 'time', routePolylines = [];
+let socChart = null; // ★コレが未定義でエラーになっていました
 
 // 気温取得API
 async function fetchTemp(lat, lng, dateStr) {
-    const month = dateStr ? new Date(dateStr).getMonth() + 1 : 4;
+    const d = dateStr ? new Date(dateStr) : new Date();
+    const month = isNaN(d) ? 4 : d.getMonth() + 1; // 日付未入力の安全対策
     try {
         const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lng}&start_date=2023-${String(month).padStart(2,'0')}-01&end_date=2023-${String(month).padStart(2,'0')}-05&daily=temperature_2m_mean&timezone=Asia%2FTokyo`;
         const r = await fetch(url);
-        const d = await r.json();
-        return d.daily.temperature_2m_mean[0] || 15;
+        const data = await r.json();
+        return data.daily.temperature_2m_mean[0] || 15;
     } catch(e) { return 15; }
 }
 
-// ★ 地図の初期化（関数名を統一）
 function initApp() {
   googleMap = new google.maps.Map(document.getElementById('map'), {
-    center: { lat: 36, lng: 138 }, zoom: 6, styles: [{elementType:'geometry',stylers:[{color:'#1e293b'}]},{featureType:'water',stylers:[{color:'#0f172a'}]}]
+    center: { lat: 35.7, lng: 139.4 }, zoom: 6, styles: [{elementType:'geometry',stylers:[{color:'#1e293b'}]},{featureType:'water',stylers:[{color:'#0f172a'}]}]
   });
   directionsService = new google.maps.DirectionsService();
-  elevationService = new google.maps.ElevationService();
-  placesService = new google.maps.places.PlacesService(googleMap);
-
-  // サジェスト機能の有効化
+  
+  // サジェスト機能
   new google.maps.places.Autocomplete(document.getElementById('origin'));
   new google.maps.places.Autocomplete(document.getElementById('dest'));
 
@@ -132,25 +129,38 @@ async function runSimulation(segments, dateStr, params) {
 
   for (let i = 0; i < segments.length; i++) {
     const s = segments[i];
+    // 100kmごとに気温を再取得
     if (Math.abs(km - lastWeatherKm) > 100) {
         curTemp = await fetchTemp(s.lat, s.lng, dateStr);
         lastWeatherKm = km;
     }
+    
+    // 電費補正 (20度未満で低下)
     const tempFactor = 1.0 - (curTemp < 20 ? (20 - curTemp) * 0.015 : 0);
-    const energy = (s.distKm / (7.0 * tempFactor)); // 簡易電費
+    const baseEff = s.speed > 75 ? 5.2 : 7.0; // 高速道路判定
+    const energy = (s.distKm / (baseEff * tempFactor)); 
     const currentSoc = (socKwh/batteryKwh)*100;
 
+    // 充電実行
     if (pending && i >= pending.targetIdx) {
       const chg = { km, charger: pending, socBefore: currentSoc, time };
-      chg.socAfter = Math.min(85, currentSoc + 40); // 簡易充電
+      chg.duration = 30;
+      chg.socAfter = Math.min(85, currentSoc + (40/60*30/batteryKwh*100)); // 30分充電
       stops.push(chg);
-      time += 30; socKwh = (chg.socAfter/100)*batteryKwh;
+      
+      profile.push({ xDist: km, xTime: time, ySoc: currentSoc, lat: s.lat, lng: s.lng });
+      time += 30; 
+      socKwh = (chg.socAfter/100)*batteryKwh;
+      profile.push({ xDist: km, xTime: time, ySoc: chg.socAfter, lat: s.lat, lng: s.lng });
+      
+      lastChargeKm = km; 
       pending = null;
     }
 
+    // 充電器サーチ
     if (!pending && currentSoc < thresholdSocPct + 10 && (km - lastChargeKm) > 50) {
-      const found = chargerDB.find(c => haversine(c.lat, c.lng, s.lat, s.lng) < 5.0);
-      if (found) { found.targetIdx = i + 1; pending = found; lastChargeKm = km; }
+      const found = chargerDB.find(c => haversine(c.lat, c.lng, s.lat, s.lng) < 3.0);
+      if (found) { found.targetIdx = i + 2; pending = found; }
     }
 
     socKwh = Math.max(0, socKwh - energy);
@@ -161,25 +171,55 @@ async function runSimulation(segments, dateStr, params) {
 }
 
 async function onCalculate() {
-  showLoading('ルート計算中...');
+  showLoading('最適なルートと環境データを解析中...');
   const origin = document.getElementById('origin').value;
   const dest = document.getElementById('dest').value;
   
-  directionsService.route({ origin, destination: dest, travelMode: 'DRIVING' }, async (res, status) => {
-    if(status!=='OK') return hideLoading()||alert('ルートが見つかりません');
-    const steps = res.routes[0].legs[0].steps;
-    const segments = steps.map(s => ({ distKm: s.distance.value/1000, speed: (s.distance.value/s.duration.value)*3.6||60, lat: s.start_location.lat(), lng: s.start_location.lng() }));
-    
-    currentSim = await runSimulation(segments, document.getElementById('trip-date').value, {
-        batteryKwh: 71.4, startSocPct: parseFloat(document.getElementById('start-soc').value), thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value)
-    });
+  try {
+      directionsService.route({ origin, destination: dest, travelMode: 'DRIVING' }, async (res, status) => {
+        if(status!=='OK') {
+            alert('ルートが見つかりません。地名を変えてみてください。');
+            return hideLoading();
+        }
+        
+        const steps = res.routes[0].legs[0].steps;
+        const segments = steps.map(s => ({ 
+            distKm: s.distance.value/1000, 
+            speed: (s.distance.value/s.duration.value)*3.6||60, 
+            lat: s.start_location.lat(), 
+            lng: s.start_location.lng() 
+        }));
+        
+        currentSim = await runSimulation(segments, document.getElementById('trip-date').value, {
+            batteryKwh: 71.4, 
+            startSocPct: parseFloat(document.getElementById('start-soc').value), 
+            thresholdSocPct: parseFloat(document.getElementById('threshold-soc').value)
+        });
 
-    document.getElementById('results').style.display = 'block';
-    document.getElementById('r-soc').textContent = currentSim.arrivalSoc.toFixed(0) + '%';
-    document.getElementById('r-eta').textContent = Math.floor(currentSim.eta/60) + '時間';
-    renderCharts();
-    hideLoading();
-  });
+        // 統計パネルの更新
+        document.getElementById('results').style.display = 'block';
+        document.getElementById('r-soc').textContent = currentSim.arrivalSoc.toFixed(0) + '%';
+        document.getElementById('r-eta').textContent = Math.floor(currentSim.eta/60) + '時間' + Math.round(currentSim.eta%60) + '分';
+        
+        // 充電スポットリストの更新
+        const list = document.getElementById('stop-list');
+        list.innerHTML = '';
+        currentSim.stops.forEach((st) => {
+            const div = document.createElement('div');
+            div.className = 'stop-item';
+            div.innerHTML = `<div style="font-weight:bold;color:var(--accent2)">${st.charger.name}</div>
+                             <div style="font-size:12px;color:var(--muted)">到着時: ${st.socBefore.toFixed(0)}% → 完了時: ${st.socAfter.toFixed(0)}% (30分充電)</div>`;
+            list.appendChild(div);
+        });
+
+        renderCharts();
+        hideLoading();
+      });
+  } catch (error) {
+      alert('計算中にエラーが発生しました');
+      console.error(error);
+      hideLoading();
+  }
 }
 
 function setAxis(a) {
@@ -192,11 +232,34 @@ function setAxis(a) {
 function renderCharts() {
   if (!currentSim) return;
   const socData = currentSim.profile.map(p => ({ x: currentAxis==='time'?p.xTime:p.xDist, y: p.ySoc }));
+  
   if (socChart) socChart.destroy();
   socChart = new Chart(document.getElementById('soc-chart'), {
-    type: 'line', data: { datasets: [{ data: socData, pointRadius: 0, borderWidth: 3, borderColor: '#3b82f6' }]},
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+    type: 'line', 
+    data: { datasets: [{ data: socData, pointRadius: 0, borderWidth: 3, borderColor: '#06b6d4' }]},
+    options: { 
+        responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { x: { type: 'linear', ticks: { callback: v => currentAxis==='time'?Math.floor(v/60)+'h'+Math.round(v%60)+'m' : v.toFixed(0)+'km'} } }
+    }
   });
+
+  // マップ上のSOCライン描画
+  routePolylines.forEach(p => p.setMap(null));
+  routePolylines = [];
+  for(let i=0; i<currentSim.profile.length-1; i+=3) { // 負荷軽減のため間引いて描画
+    const p1 = currentSim.profile[i], p2 = currentSim.profile[i+1];
+    if(!p1 || !p2 || !p1.lat) continue;
+    const s = p1.ySoc;
+    
+    // SOCに応じて青から赤へ色を変える
+    const r = Math.floor(Math.max(0, Math.min(255, (100-s)*5)));
+    const b = Math.floor(Math.max(0, Math.min(255, s*2.5)));
+    
+    routePolylines.push(new google.maps.Polyline({
+      path: [{lat:p1.lat, lng:p1.lng}, {lat:p2.lat, lng:p2.lng}],
+      strokeColor: `rgb(${r}, 100, ${b})`, strokeWeight: 5, map: googleMap
+    }));
+  }
 }
 
 function showLoading(m) { document.getElementById('loading-msg').textContent=m; document.getElementById('loading').classList.add('show'); }
